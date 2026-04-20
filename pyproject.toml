@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-mcp-search"
+version = "0.1.0"
+description = "Local MCP server for code and knowledge-base retrieval with OpenAI-compatible embeddings."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "lancedb>=0.30.2",
+  "mcp[cli]>=1.6.0",
+  "openai>=1.30.0",
+]
+
+[project.scripts]
+local-mcp-search = "local_mcp_search.server:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
