@@ -122,6 +122,45 @@ codex mcp add local-search -- powershell -File D:\trae_prj\mcp_sd\run-local-mcp-
 
 这个启动脚本会自动读取本地 embedding JSON 配置并注入环境变量。
 
+### 任意目录下的便捷方式（推荐）
+
+如果你希望在任何目录打开终端都能快速把 MCP 指向“当前项目”，并先刷新索引，使用：
+
+```powershell
+D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot (Get-Location).Path
+```
+
+这个脚本会自动做三件事：
+
+1. 使用你的本地模型配置完成 `reindex`
+2. 更新 `codex mcp` 中的 `local-search` 指向当前项目
+3. 可选直接启动 `codex`
+
+如果你已经把 `cpx` 别名写入 PowerShell profile，日常可以直接用：
+
+```powershell
+cpx -ProjectRoot D:\trae_prj\myagent -Mode auto
+```
+
+最短启动流程一般是这条：
+
+```powershell
+cpx -ProjectRoot D:\trae_prj\myagent -Launch
+```
+
+常用参数：
+
+```powershell
+# 首次或大改后强制全量重建，再启动 codex
+D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -ReindexMode full -LaunchCodex
+
+# 日常增量刷新
+D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -ReindexMode auto
+
+# 指定不同模型配置
+D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -ModelConfigPath C:\path\to\your-model.json
+```
+
 ## 5. 接入 Claude Code
 
 示意：
