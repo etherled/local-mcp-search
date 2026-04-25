@@ -32,6 +32,8 @@ class IndexStore:
             }
 
         payload = self._read_metadata()
+        changed_paths = self._detect_changed_paths()
+        changed_count = len(changed_paths) if changed_paths is not None else None
         return {
             "repo_root": str(self.settings.workspace_root),
             "index_exists": True,
@@ -45,6 +47,11 @@ class IndexStore:
             "kb_chunk_count": payload.get("kb_chunk_count", 0),
             "last_indexed_commit": payload.get("last_indexed_commit"),
             "tracked_file_count": len(payload.get("file_manifest", {})),
+            "index_may_be_stale": changed_count is None or changed_count > 0,
+            "changed_path_count": changed_count,
+            "suggested_action": "reindex auto"
+            if changed_count is None or changed_count > 0
+            else None,
         }
 
     def rebuild(self, mode: str = "auto") -> dict:
@@ -68,6 +75,9 @@ class IndexStore:
             status["changed_paths"] = []
             return status
         return self._incremental_rebuild(changed_paths)
+
+    def detect_changed_paths_public(self) -> set[str] | None:
+        return self._detect_changed_paths()
 
     def semantic_search(
         self,
@@ -105,6 +115,7 @@ class IndexStore:
         for row in rows:
             distance = float(row.get("_distance", 0.0))
             score = 1.0 / (1.0 + max(distance, 0.0))
+            vector_score = round(score, 4)
             results.append(
                 SearchResult(
                     path=row["path"],
@@ -112,8 +123,9 @@ class IndexStore:
                     line_end=int(row["line_end"]),
                     symbol=row.get("symbol"),
                     snippet=short_snippet(row["text"]),
-                    score=round(score, 4),
+                    score=vector_score,
                     why_matched=f"semantic similarity against {doc_type} index",
+                    vector_score=vector_score,
                     title=row.get("title"),
                     section=row.get("section"),
                     chunk_id=row.get("chunk_id"),

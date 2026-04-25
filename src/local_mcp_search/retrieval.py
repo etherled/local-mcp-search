@@ -4,12 +4,15 @@ import threading
 import time
 
 from .config import Settings
+from .context_pack import build_context_pack
 from .embedding_client import EmbeddingClient
 from .exact_search import run_exact_search
 from .index_store import IndexStore
 from .models import SearchResult
+from .outline import build_file_outline
 from .reranker_client import RerankerClient
 from .repo_overview import build_repo_overview
+from .spans import open_spans
 from .symbol_search import run_symbol_search
 
 
@@ -141,6 +144,7 @@ class RetrievalService:
                 continue
             item = results[score.index]
             item.score = round(score.score, 4)
+            item.rerank_score = round(score.score, 4)
             item.why_matched = "semantic vector recall, reranked by reranker"
             reranked.append(item)
             used_indexes.add(score.index)
@@ -152,6 +156,156 @@ class RetrievalService:
                 if index not in used_indexes
             )
         return reranked[:max_results]
+
+    def code_context_pack(
+        self,
+        query: str,
+        *,
+        language: list[str] | None = None,
+        max_results: int = 8,
+        max_chars: int | None = None,
+    ) -> dict:
+        search = self.code_semantic_search(
+            query,
+            language=language,
+            max_results=max_results,
+        )
+        pack = build_context_pack(
+            self.settings.workspace_root,
+            search["results"],
+            max_chars=max_chars or self.settings.context_pack_max_chars,
+        )
+        pack["query"] = query
+        pack["source_results"] = search["results"]
+        return pack
+
+    def file_outline(self, path: str, *, max_items: int = 80) -> dict:
+        return build_file_outline(
+            self.settings.workspace_root,
+            path,
+            max_items=max_items,
+        )
+
+    def symbol_context(
+        self,
+        symbol: str,
+        *,
+        max_results: int = 8,
+        max_chars: int | None = None,
+    ) -> dict:
+        definitions = self.symbol_search(symbol, max_results=max_results)["results"]
+        references = self.code_exact_search(symbol, max_results=max_results)["results"]
+        combined = definitions + [
+            item
+            for item in references
+            if (item["path"], item["line_start"], item["line_end"])
+            not in {
+                (definition["path"], definition["line_start"], definition["line_end"])
+                for definition in definitions
+            }
+        ]
+        pack = build_context_pack(
+            self.settings.workspace_root,
+            combined,
+            max_chars=max_chars or self.settings.context_pack_max_chars,
+        )
+        pack["symbol"] = symbol
+        pack["definitions"] = definitions
+        pack["references"] = references
+        return pack
+
+    def doc_answer_context(
+        self,
+        query: str,
+        *,
+        max_results: int = 6,
+        max_chars: int | None = None,
+    ) -> dict:
+        search = self.kb_search(query, max_results=max_results)
+        pack = build_context_pack(
+            self.settings.workspace_root,
+            search["results"],
+            max_chars=max_chars or self.settings.context_pack_max_chars,
+        )
+        pack["query"] = query
+        pack["source_results"] = search["results"]
+        return pack
+
+    def change_context(self, *, max_results: int = 30, max_chars: int | None = None) -> dict:
+        changed_paths = self.index_store.detect_changed_paths_public()
+        if changed_paths is None:
+            return {
+                "changed_paths": None,
+                "items": [],
+                "message": "Change detection unavailable; run reindex auto or inspect git status.",
+            }
+
+        items = []
+        for rel_path in sorted(changed_paths)[:max_results]:
+            path = self.settings.workspace_root / rel_path
+            if not path.exists() or not path.is_file():
+                items.append({"path": rel_path, "status": "deleted_or_missing"})
+                continue
+            try:
+                outline = build_file_outline(self.settings.workspace_root, rel_path, max_items=30)
+            except Exception:
+                outline = {"path": rel_path, "items": []}
+            items.append({"path": rel_path, "status": "changed", "outline": outline["items"]})
+
+        opened = []
+        remaining_chars = max_chars or self.settings.context_pack_max_chars
+        for item in items:
+            if item["status"] != "changed":
+                continue
+            try:
+                span = open_spans(
+                    self.settings.workspace_root,
+                    [{"path": item["path"], "line_start": 1, "line_end": 80}],
+                    max_total_chars=remaining_chars,
+                )[0]
+            except Exception:
+                continue
+            remaining_chars -= len(span["content"])
+            opened.append(span)
+            if remaining_chars <= 0:
+                break
+
+        return {
+            "changed_paths": sorted(changed_paths),
+            "items": items,
+            "context": opened,
+        }
+
+    def dependency_overview(self, *, max_files: int = 12) -> dict:
+        candidates = [
+            "package.json",
+            "pyproject.toml",
+            "requirements.txt",
+            "uv.lock",
+            "poetry.lock",
+            "Cargo.toml",
+            "go.mod",
+            "pom.xml",
+            "build.gradle",
+            "settings.gradle",
+            "composer.json",
+            "Gemfile",
+            "Dockerfile",
+            "docker-compose.yml",
+        ]
+        found = []
+        for rel_path in candidates:
+            path = self.settings.workspace_root / rel_path
+            if path.exists() and path.is_file():
+                found.append(rel_path)
+            if len(found) >= max_files:
+                break
+        context = open_spans(
+            self.settings.workspace_root,
+            [{"path": path, "line_start": 1, "line_end": 120} for path in found],
+            max_total_chars=self.settings.context_pack_max_chars,
+        )
+        return {"files": found, "context": context}
 
     def start_background_watcher(self) -> bool:
         if not self.settings.auto_reindex_enabled:

@@ -35,6 +35,8 @@ class SearchResult:
     snippet: str
     score: float
     why_matched: str
+    vector_score: float | None = None
+    rerank_score: float | None = None
     title: str | None = None
     section: str | None = None
     chunk_id: str | None = None

@@ -7,6 +7,7 @@ param(
     [string]$ReindexMode = "auto",
     [switch]$LaunchCodex,
     [switch]$DisableReranker,
+    [switch]$WriteClaudeProjectConfig,
     [bool]$EnableAutoReindex = $true,
     [int]$AutoReindexIntervalSeconds = 5
 )
@@ -94,6 +95,34 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Current MCP config:"
 & codex mcp get $ServerName
+
+if ($WriteClaudeProjectConfig) {
+    $claudeArgs = @(
+        "-File", $runScriptPath,
+        "-WorkspaceRoot", $resolvedProjectRoot,
+        "-ModelConfigPath", $resolvedModelConfigPath
+    )
+    if (-not $DisableReranker.IsPresent -and $resolvedRerankerConfigPath -ne "") {
+        $claudeArgs += @("-RerankerConfigPath", $resolvedRerankerConfigPath)
+    }
+    else {
+        $claudeArgs += "-DisableReranker"
+    }
+    if ($EnableAutoReindex) {
+        $claudeArgs += @("-AutoReindex", "-AutoReindexIntervalSeconds", "$AutoReindexIntervalSeconds")
+    }
+    $mcpJson = @{
+        mcpServers = @{
+            $ServerName = @{
+                command = "powershell"
+                args = $claudeArgs
+            }
+        }
+    } | ConvertTo-Json -Depth 10
+    $mcpJsonPath = Join-Path $resolvedProjectRoot ".mcp.json"
+    Set-Content -LiteralPath $mcpJsonPath -Value $mcpJson -Encoding UTF8
+    Write-Host "Wrote Claude Code project MCP config: $mcpJsonPath"
+}
 
 if ($LaunchCodex) {
     Write-Host "Launching Codex at: $resolvedProjectRoot"

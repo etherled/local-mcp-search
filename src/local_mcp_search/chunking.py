@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from .config import CODE_EXTENSIONS, KB_DIR_HINTS, KB_EXTENSIONS, Settings
+
+
+SYMBOL_BOUNDARY_RE = re.compile(
+    r"^\s*(?:export\s+)?(?:async\s+)?(?:def|class|function|interface|type|enum)\s+([A-Za-z_][\w$]*)"
+    r"|^\s*(?:export\s+)?const\s+([A-Za-z_][\w$]*)\s*="
+)
 
 
 def detect_doc_type(path: Path) -> str | None:
@@ -23,6 +30,10 @@ def chunk_code_text(path: Path, text: str, settings: Settings) -> list[dict]:
     lines = text.splitlines()
     if not lines:
         return []
+
+    symbol_chunks = chunk_code_by_symbols(path, lines, settings)
+    if symbol_chunks:
+        return symbol_chunks
 
     size = settings.code_chunk_lines
     overlap = min(settings.code_chunk_overlap, max(size - 1, 0))
@@ -48,6 +59,41 @@ def chunk_code_text(path: Path, text: str, settings: Settings) -> list[dict]:
         )
         if end_idx >= len(lines):
             break
+    return chunks
+
+
+def chunk_code_by_symbols(path: Path, lines: list[str], settings: Settings) -> list[dict]:
+    if path.suffix.lower() not in {".py", ".js", ".jsx", ".ts", ".tsx"}:
+        return []
+
+    starts: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        match = SYMBOL_BOUNDARY_RE.search(line)
+        if not match:
+            continue
+        name = match.group(1) or match.group(2)
+        starts.append((index, name))
+
+    if len(starts) < 2:
+        return []
+
+    chunks: list[dict] = []
+    max_lines = max(settings.code_chunk_lines, 40)
+    for position, (start_idx, symbol) in enumerate(starts):
+        next_start = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
+        end_idx = min(next_start, start_idx + max_lines)
+        chunk_text = "\n".join(lines[start_idx:end_idx]).strip()
+        if not chunk_text:
+            continue
+        chunks.append(
+            {
+                "path": str(path),
+                "line_start": start_idx + 1,
+                "line_end": end_idx,
+                "symbol": symbol,
+                "text": chunk_text,
+            }
+        )
     return chunks
 
 

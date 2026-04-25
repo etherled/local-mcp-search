@@ -19,6 +19,10 @@ def main() -> None:
         default="auto",
         help="Reindex mode. auto uses git/manifest-based change detection.",
     )
+    pack_parser = subparsers.add_parser("context-pack", help="Build a compact code context pack")
+    pack_parser.add_argument("query")
+    pack_parser.add_argument("--max-results", type=int, default=8)
+    pack_parser.add_argument("--max-chars", type=int, default=None)
 
     args = parser.parse_args()
     service = RetrievalService(Settings.from_env())
@@ -28,6 +32,19 @@ def main() -> None:
         return
     if args.command == "reindex":
         print(json.dumps(service.reindex(mode=args.mode), ensure_ascii=False, indent=2))
+        return
+    if args.command == "context-pack":
+        print(
+            json.dumps(
+                service.code_context_pack(
+                    args.query,
+                    max_results=args.max_results,
+                    max_chars=args.max_chars,
+                ),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return
 
     raise SystemExit(f"Unknown command: {args.command}")

@@ -7,6 +7,12 @@
 - `code_semantic_search`
 - `kb_search`
 - `repo_overview`
+- `code_context_pack`
+- `file_outline`
+- `symbol_context`
+- `doc_answer_context`
+- `change_context`
+- `dependency_overview`
 - `open_spans`
 - `index_status`
 - `reindex`
@@ -47,6 +53,9 @@ $env:MCP_SEARCH_AUTO_REINDEX="true"
 $env:MCP_SEARCH_AUTO_REINDEX_INTERVAL_SECONDS="5"
 $env:MCP_SEARCH_RERANKER_CANDIDATE_MULTIPLIER="6"
 $env:MCP_SEARCH_RERANKER_MAX_CANDIDATES="80"
+$env:MCP_SEARCH_RERANKER_CACHE_ENABLED="true"
+$env:MCP_SEARCH_RERANKER_CACHE_MAX_ENTRIES="5000"
+$env:MCP_SEARCH_CONTEXT_PACK_MAX_CHARS="20000"
 $env:RERANKER_TIMEOUT_SECONDS="30"
 ```
 
@@ -92,6 +101,12 @@ python -m local_mcp_search.cli reindex --mode incremental
 python -m local_mcp_search.cli status
 ```
 
+快速测试上下文打包：
+
+```powershell
+python -m local_mcp_search.cli context-pack "登录鉴权相关实现" --max-results 6 --max-chars 12000
+```
+
 直接启动 stdio server：
 
 ```powershell
@@ -133,7 +148,13 @@ mcp dev src/local_mcp_search/server.py
 - 查具体函数、类、接口、类型定义时优先用 `symbol_search`
 - 查精确文本出现位置时用 `code_exact_search`
 - 查相似实现或相关逻辑时用 `code_semantic_search`
+- 需要直接拿到可阅读上下文时用 `code_context_pack`
+- 打开大文件前先用 `file_outline`
+- 围绕某个函数、类、类型、常量改代码时用 `symbol_context`
 - 查设计方案、计划、ADR、说明文档时用 `kb_search`
+- 回答项目文档问题时用 `doc_answer_context`
+- 接手本地改动或 review 前用 `change_context`
+- 判断依赖、框架、构建方式时用 `dependency_overview`
 - 搜到候选后，用 `open_spans` 拉精确上下文，不要直接展开整文件
 
 ## 4. 接入 Codex
@@ -195,6 +216,22 @@ D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -Re
 
 # 关闭 reranker，只使用 LanceDB 向量排序
 D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -DisableReranker
+
+# 同时写入 Claude Code 项目级 .mcp.json
+D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -WriteClaudeProjectConfig
+```
+
+`cpx` 别名也支持这些参数：
+
+```powershell
+# 指定 reranker 配置
+cpx -ProjectRoot D:\trae_prj\myagent -RerankerConfigPath C:\path\to\your-reranker.json
+
+# 临时关闭 reranker
+cpx -ProjectRoot D:\trae_prj\myagent -DisableReranker -Launch
+
+# 为 Claude Code 生成项目级 .mcp.json
+cpx -ProjectRoot D:\trae_prj\myagent -WriteClaudeProjectConfig
 ```
 
 验证 Codex 是否接上：
@@ -270,7 +307,30 @@ claude mcp remove local-search
 claude mcp add local-search -- powershell -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\trae_prj\myagent -DisableReranker
 ```
 
-## 6. 当前限制
+也可以生成项目级 `.mcp.json`，让 Claude Code 在该项目中自动发现 MCP：
+
+```powershell
+cpx -ProjectRoot D:\trae_prj\myagent -WriteClaudeProjectConfig
+cd D:\trae_prj\myagent
+claude
+```
+
+项目级 `.mcp.json` 会写入目标项目根目录；只在你信任的项目里使用。
+
+## 6. 新增增强能力
+
+- `code_context_pack`：自动完成语义召回、rerank、去重、合并相邻片段和字符预算裁剪，适合实现功能或调 bug 前获取紧凑上下文。
+- `file_outline`：返回单文件里的函数、类、接口、类型、常量和路由式声明，适合打开大文件前先定位。
+- `symbol_context`：围绕 symbol 聚合定义、引用和代码片段，适合改函数、类、类型或配置项。
+- `doc_answer_context`：从 README、docs、ADR、工作记录等知识库文件中返回紧凑回答上下文。
+- `change_context`：汇总当前 Git/manifest 变更文件并提供紧凑上下文，适合 review 或继续中断工作。
+- `dependency_overview`：读取 `package.json`、`pyproject.toml`、`go.mod`、`Dockerfile` 等依赖/构建文件，快速判断项目技术栈。
+- `index_status`：现在会提示 `index_may_be_stale`、`changed_path_count` 和建议的 `reindex auto`。
+- 语义搜索结果同时保留 `vector_score` 和 `rerank_score`，便于判断粗召回和精排效果。
+- reranker 支持内存缓存，减少重复 query/chunk 的公网 rerank 调用。
+- Python / JS / TS 代码优先按轻量 symbol 边界切块，其他语言继续使用行窗口切块。
+
+## 7. 当前限制
 
 - 代码切块先采用轻量规则，不做完整 AST 级别切块
 - 向量索引存在 `.mcp-index\lancedb\`

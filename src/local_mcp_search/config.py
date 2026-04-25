@@ -75,6 +75,9 @@ class Settings:
     reranker_timeout_seconds: int
     reranker_candidate_multiplier: int
     reranker_max_candidates: int
+    reranker_cache_enabled: bool
+    reranker_cache_max_entries: int
+    context_pack_max_chars: int
     max_file_bytes: int
     code_chunk_lines: int
     code_chunk_overlap: int
@@ -113,6 +116,13 @@ class Settings:
             or 6,
             reranker_max_candidates=_get_int("MCP_SEARCH_RERANKER_MAX_CANDIDATES", 80)
             or 80,
+            reranker_cache_enabled=_get_bool("MCP_SEARCH_RERANKER_CACHE_ENABLED", True),
+            reranker_cache_max_entries=_get_int(
+                "MCP_SEARCH_RERANKER_CACHE_MAX_ENTRIES", 5_000
+            )
+            or 5_000,
+            context_pack_max_chars=_get_int("MCP_SEARCH_CONTEXT_PACK_MAX_CHARS", 20_000)
+            or 20_000,
             max_file_bytes=_get_int("MCP_SEARCH_MAX_FILE_BYTES", 300_000) or 300_000,
             code_chunk_lines=_get_int("MCP_SEARCH_CODE_CHUNK_LINES", 120) or 120,
             code_chunk_overlap=_get_int("MCP_SEARCH_CODE_CHUNK_OVERLAP", 20) or 20,
