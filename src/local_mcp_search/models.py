@@ -38,6 +38,9 @@ class SearchResult:
     title: str | None = None
     section: str | None = None
     chunk_id: str | None = None
+    text: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data.pop("text", None)
+        return data

@@ -1,10 +1,12 @@
 param(
     [string]$ProjectRoot = (Get-Location).Path,
     [string]$ModelConfigPath = "C:\Users\yyyx\Documents\models-setting\my-embd-bge-zh.json",
+    [string]$RerankerConfigPath = "C:\Users\yyyx\Documents\models-setting\qwen3-reranker_lingya.json",
     [string]$ServerName = "local-search",
     [ValidateSet("auto", "full", "incremental")]
     [string]$ReindexMode = "auto",
     [switch]$LaunchCodex,
+    [switch]$DisableReranker,
     [bool]$EnableAutoReindex = $true,
     [int]$AutoReindexIntervalSeconds = 5
 )
@@ -20,6 +22,10 @@ if (-not (Test-Path -LiteralPath $runScriptPath)) {
 
 $resolvedProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $resolvedModelConfigPath = (Resolve-Path -LiteralPath $ModelConfigPath).Path
+$resolvedRerankerConfigPath = ""
+if ($RerankerConfigPath -ne "" -and (Test-Path -LiteralPath $RerankerConfigPath)) {
+    $resolvedRerankerConfigPath = (Resolve-Path -LiteralPath $RerankerConfigPath).Path
+}
 
 $cfg = Get-Content -Raw -LiteralPath $resolvedModelConfigPath | ConvertFrom-Json
 if (-not $cfg.base_url -or -not $cfg.model_name -or -not $cfg.api_key) {
@@ -30,6 +36,19 @@ $env:EMBEDDING_BASE_URL = $cfg.base_url
 $env:EMBEDDING_MODEL = $cfg.model_name
 $env:EMBEDDING_API_KEY = $cfg.api_key
 $env:MCP_SEARCH_WORKSPACE_ROOT = $resolvedProjectRoot
+if (-not $DisableReranker.IsPresent -and $resolvedRerankerConfigPath -ne "") {
+    $rerankerCfg = Get-Content -Raw -LiteralPath $resolvedRerankerConfigPath | ConvertFrom-Json
+    if (-not $rerankerCfg.base_url -or -not $rerankerCfg.model_name -or -not $rerankerCfg.api_key) {
+        throw "Reranker config must include base_url, model_name, and api_key."
+    }
+    $env:MCP_SEARCH_RERANKER_ENABLED = "true"
+    $env:RERANKER_BASE_URL = $rerankerCfg.base_url
+    $env:RERANKER_MODEL = $rerankerCfg.model_name
+    $env:RERANKER_API_KEY = $rerankerCfg.api_key
+}
+else {
+    $env:MCP_SEARCH_RERANKER_ENABLED = "false"
+}
 
 Push-Location $resolvedProjectRoot
 try {
@@ -52,6 +71,13 @@ $addArgs = @(
     "-WorkspaceRoot", $resolvedProjectRoot,
     "-ModelConfigPath", $resolvedModelConfigPath
 )
+
+if (-not $DisableReranker.IsPresent -and $resolvedRerankerConfigPath -ne "") {
+    $addArgs += @("-RerankerConfigPath", $resolvedRerankerConfigPath)
+}
+else {
+    $addArgs += @("-DisableReranker")
+}
 
 if ($EnableAutoReindex) {
     $addArgs += @(

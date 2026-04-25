@@ -76,6 +76,7 @@ class IndexStore:
         doc_type: str,
         max_results: int,
         languages: list[str] | None = None,
+        candidate_count: int | None = None,
     ) -> list[SearchResult]:
         if not self.metadata_path.exists():
             return []
@@ -97,7 +98,8 @@ class IndexStore:
             )
             filters.append(f"language IN ({language_filters})")
         query_builder = query_builder.where(" AND ".join(filters))
-        rows = query_builder.limit(max_results).to_list()
+        limit = candidate_count or max_results
+        rows = query_builder.limit(limit).to_list()
 
         results: list[SearchResult] = []
         for row in rows:
@@ -115,6 +117,7 @@ class IndexStore:
                     title=row.get("title"),
                     section=row.get("section"),
                     chunk_id=row.get("chunk_id"),
+                    text=row.get("text"),
                 )
             )
         return results

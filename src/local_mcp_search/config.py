@@ -68,6 +68,13 @@ class Settings:
     embedding_model: str
     embedding_api_key: str
     embedding_dimensions: int | None
+    reranker_enabled: bool
+    reranker_base_url: str
+    reranker_model: str
+    reranker_api_key: str
+    reranker_timeout_seconds: int
+    reranker_candidate_multiplier: int
+    reranker_max_candidates: int
     max_file_bytes: int
     code_chunk_lines: int
     code_chunk_overlap: int
@@ -95,6 +102,17 @@ class Settings:
             ),
             embedding_api_key=os.environ.get("EMBEDDING_API_KEY", ""),
             embedding_dimensions=_get_int("EMBEDDING_DIMENSIONS"),
+            reranker_enabled=_get_bool("MCP_SEARCH_RERANKER_ENABLED", True),
+            reranker_base_url=os.environ.get("RERANKER_BASE_URL", ""),
+            reranker_model=os.environ.get("RERANKER_MODEL", ""),
+            reranker_api_key=os.environ.get("RERANKER_API_KEY", ""),
+            reranker_timeout_seconds=_get_int("RERANKER_TIMEOUT_SECONDS", 30) or 30,
+            reranker_candidate_multiplier=_get_int(
+                "MCP_SEARCH_RERANKER_CANDIDATE_MULTIPLIER", 6
+            )
+            or 6,
+            reranker_max_candidates=_get_int("MCP_SEARCH_RERANKER_MAX_CANDIDATES", 80)
+            or 80,
             max_file_bytes=_get_int("MCP_SEARCH_MAX_FILE_BYTES", 300_000) or 300_000,
             code_chunk_lines=_get_int("MCP_SEARCH_CODE_CHUNK_LINES", 120) or 120,
             code_chunk_overlap=_get_int("MCP_SEARCH_CODE_CHUNK_OVERLAP", 20) or 20,
