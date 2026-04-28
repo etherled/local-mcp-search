@@ -167,118 +167,214 @@ codex mcp add local-search -- powershell -File D:\trae_prj\mcp_sd\run-local-mcp-
 
 这个启动脚本会自动读取本地 embedding JSON 和 reranker JSON 配置并注入环境变量。
 
-### 任意目录下的便捷方式（推荐）
+### Codex 会话恢复快捷脚本
 
-如果你希望在任何目录打开终端都能快速把 MCP 指向“当前项目”，并先刷新索引，使用：
+如果你希望退出 Codex 后，自动生成一个“恢复当前会话”的快捷脚本，使用：
 
 ```powershell
-local-search
+codexr
 ```
 
-这条命令默认会：
+它会：
 
-1. 使用当前目录作为项目根目录
-2. 刷新本地 LanceDB 索引
-3. 更新 Codex 的 `local-search` MCP 配置
-4. 更新 Claude Code 的 `local-search` MCP 配置
+1. 启动 `codex`
+2. 等你正常退出
+3. 从 `~/.codex/sessions` 找到当前项目刚结束的 session
+4. 在当前项目目录写出 `resume-codex-last.ps1`
+
+之后你可以直接执行：
+
+```powershell
+.\resume-codex-last.ps1
+```
+
+它本质上等价于：
+
+```powershell
+codex resume <session_id>
+```
 
 指定项目目录：
 
 ```powershell
-local-search -ProjectRoot D:\trae_prj\myagent
+codexr -ProjectRoot D:\trae_prj\myagent
 ```
 
-刷新索引后直接启动 Codex：
+指定恢复脚本输出路径：
 
 ```powershell
-local-search -ProjectRoot D:\trae_prj\myagent -LaunchCodex
+codexr -ProjectRoot D:\trae_prj\myagent -ResumeScriptPath D:\shortcuts\resume-myagent.ps1
 ```
 
-同时写入 Claude Code 项目级 `.mcp.json`：
+如果你更想生成基于“最近一次会话”的恢复脚本，而不是固定某个 `session_id`，可以使用：
 
 ```powershell
-local-search -ProjectRoot D:\trae_prj\myagent -ProjectClaudeConfig
+codexr -UseLastResume
 ```
 
-如果只想更新 Codex，不更新 Claude Code，可以使用底层 `cpx`：
+说明：
+
+- 这是外层包装器方案，不是改动 Codex 内部 `/exit` 行为。
+- 当前 Codex CLI 没有公开的 `/exit` 钩子，所以要实现“退出后自动生成恢复脚本”，需要通过这种方式包一层启动脚本。
+
+### 任意目录下的便捷方式（推荐）
+
+推荐把仓库里的 [cpx.ps1](D:/trae_prj/mcp_sd/cpx.ps1) 配成 PowerShell 别名 `cpx`。  
+`cpx` 是统一入口，负责四件事：
+
+1. 识别当前 workspace root
+2. 刷新本地 LanceDB 索引
+3. 更新 `local-search` MCP 配置
+4. 按当前项目恢复最近的 `Codex` 或 `Claude Code` 会话
+
+如果你希望在任意目录里直接使用 `cpx` / `local-search` / `codexr`，可以把它们写进 PowerShell profile：
 
 ```powershell
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot (Get-Location).Path
+notepad $PROFILE
 ```
 
-这个脚本会自动做三件事：
-
-1. 使用你的本地模型配置完成 `reindex`
-2. 更新 `codex mcp` 中的 `local-search` 指向当前项目
-3. 可选直接启动 `codex`
-
-如果你已经把 `cpx` 别名写入 PowerShell profile，日常可以直接用：
+推荐至少保证 profile 里存在：
 
 ```powershell
-cpx -ProjectRoot D:\trae_prj\myagent -Mode auto
+function cpx {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Args
+    )
+    & "D:\trae_prj\mcp_sd\cpx.ps1" @Args
+}
 ```
 
-如需用 `cpx` 同时注册 Claude Code：
+如果你已经按本 README 的步骤配置过 profile，新开一个 PowerShell 窗口后即可直接使用，不需要手工再次加载。
+
+默认行为是 `Codex`：
 
 ```powershell
-cpx -ProjectRoot D:\trae_prj\myagent -RegisterClaude
+cpx
 ```
 
-最短启动流程一般是这条：
+指定项目目录：
 
 ```powershell
-cpx -ProjectRoot D:\trae_prj\myagent -Launch
+cpx -ProjectRoot D:\trae_prj\myagent
 ```
 
-如果当前终端已经在项目根目录，直接执行：
+显式启动 `Codex`：
 
 ```powershell
-cpx -Launch
+cpx -Codex
 ```
 
-常用参数：
+显式启动 `Claude Code`：
 
 ```powershell
-# 首次或大改后强制全量重建，再启动 codex
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -ReindexMode full -LaunchCodex
+cpx -Claude
+```
 
-# 日常增量刷新
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -ReindexMode auto
+当前终端已经在项目目录时，最常用的是：
 
-# 指定不同模型配置
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -ModelConfigPath C:\path\to\your-model.json
+```powershell
+cpx -Codex
+cpx -Claude
+```
+
+这两条命令都会：
+
+1. 自动提升到 git 根目录；非 git 目录则使用当前目录
+2. 执行 `reindex`
+3. 更新对应客户端的 `local-search`
+4. 查找该项目最近 session 并恢复
+
+如果没有历史 session，就自动新开会话。
+
+### `cpx` 常用参数
+
+```powershell
+# 强制全量重建后恢复最近 Codex 会话
+cpx -Codex -ReindexMode full
+
+# 恢复最近 Claude 会话
+cpx -Claude
+
+# 忽略历史，直接新开
+cpx -Codex -Fresh
+cpx -Claude -Fresh
+
+# 手工选择历史 session
+cpx -Codex -Pick
+cpx -Claude -Pick
+
+# 恢复时 fork 新会话
+cpx -Codex -Fork
+cpx -Claude -Fork
+
+# 指定项目目录
+cpx -ProjectRoot D:\trae_prj\myagent -Codex
 
 # 指定不同 reranker 配置
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -RerankerConfigPath C:\path\to\your-reranker.json
-
-# 关闭 reranker，只使用 LanceDB 向量排序
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -DisableReranker
-
-# 同时写入 Claude Code 项目级 .mcp.json
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -WriteClaudeProjectConfig
-```
-
-`cpx` 别名也支持这些参数：
-
-```powershell
-# 指定 reranker 配置
-cpx -ProjectRoot D:\trae_prj\myagent -RerankerConfigPath C:\path\to\your-reranker.json
+cpx -ProjectRoot D:\trae_prj\myagent -RerankerConfigPath C:\path\to\your-reranker.json -Codex
 
 # 临时关闭 reranker
-cpx -ProjectRoot D:\trae_prj\myagent -DisableReranker -Launch
+cpx -ProjectRoot D:\trae_prj\myagent -DisableReranker -Claude
+
+# 额外把 Claude Code 的 MCP 也注册好
+cpx -ProjectRoot D:\trae_prj\myagent -Codex -RegisterClaude
 
 # 为 Claude Code 生成项目级 .mcp.json
 cpx -ProjectRoot D:\trae_prj\myagent -WriteClaudeProjectConfig
 ```
 
-验证 Codex 是否接上：
+说明：
+
+- `cpx` 默认会注册 `Codex` 的 `local-search`
+- `cpx -Claude` 会同时注册 `Claude Code` 的 `local-search`
+- `cpx -Codex -RegisterClaude` 适合你主要用 Codex，但希望 Claude 也顺手可用
+
+### 底层脚本
+
+如果你只想做“刷新索引 + 更新 MCP 配置”，不想立刻启动客户端，可以直接调用底层脚本：
+
+```powershell
+D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent
+```
+
+它默认会：
+
+1. 刷新索引
+2. 更新 Codex 的 `local-search`
+
+如果需要也一起更新 Claude：
+
+```powershell
+D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -RegisterClaude
+```
+
+如果你要直接从底层脚本启动客户端，也支持：
+
+```powershell
+D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -Codex
+D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -Claude
+```
+
+### 验证 MCP 是否接上
+
+Codex：
 
 ```powershell
 codex mcp list
 codex mcp get local-search
 ```
 
-进入 Codex 后，可以直接要求它使用本 MCP：
+Claude Code：
+
+```powershell
+claude mcp list
+claude mcp get local-search
+```
+
+### 在 Codex / Claude 里如何用
+
+进入客户端后，可以直接这样提示：
 
 ```text
 先用 local-search 看一下项目结构。
@@ -292,67 +388,16 @@ codex mcp get local-search
 用 code_semantic_search 找登录鉴权相关实现，再用 open_spans 打开关键片段。
 ```
 
+```text
+用 kb_search 查项目文档里的部署说明，再用 open_spans 打开最相关片段。
+```
+
 正常情况下，`index_status` 应该能看到：
 
 ```text
 reranker_enabled: true
 reranker_model: qwen3-reranker-8b
 ```
-
-## 5. 接入 Claude Code
-
-示意：
-
-```powershell
-claude mcp add local-search powershell.exe -- -NoProfile -ExecutionPolicy Bypass -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\your_repo
-```
-
-针对具体项目，例如：
-
-```powershell
-claude mcp add local-search powershell.exe -- -NoProfile -ExecutionPolicy Bypass -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\trae_prj\myagent
-```
-
-验证 Claude Code 是否接上：
-
-```powershell
-claude mcp list
-claude mcp get local-search
-```
-
-然后在目标项目里启动 Claude Code：
-
-```powershell
-cd D:\trae_prj\myagent
-claude
-```
-
-进入 Claude Code 后，可以这样要求它使用 MCP：
-
-```text
-先用 local-search 的 repo_overview 看项目结构，然后用 code_semantic_search 找相关实现。
-```
-
-```text
-用 kb_search 查项目文档里的部署说明，再用 open_spans 打开最相关片段。
-```
-
-如果 reranker API 临时不可用，可以重新注册为关闭 reranker：
-
-```powershell
-claude mcp remove local-search
-claude mcp add local-search powershell.exe -- -NoProfile -ExecutionPolicy Bypass -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\trae_prj\myagent -DisableReranker
-```
-
-也可以生成项目级 `.mcp.json`，让 Claude Code 在该项目中自动发现 MCP：
-
-```powershell
-cpx -ProjectRoot D:\trae_prj\myagent -WriteClaudeProjectConfig
-cd D:\trae_prj\myagent
-claude
-```
-
-项目级 `.mcp.json` 会写入目标项目根目录；只在你信任的项目里使用。
 
 ## 6. 新增增强能力
 

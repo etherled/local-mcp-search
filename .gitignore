@@ -4,3 +4,4 @@ __pycache__/
 .env
 .mcp-index/
 *.egg-info/
+resume-codex-last.ps1
