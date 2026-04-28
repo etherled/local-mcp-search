@@ -172,6 +172,37 @@ codex mcp add local-search -- powershell -File D:\trae_prj\mcp_sd\run-local-mcp-
 如果你希望在任何目录打开终端都能快速把 MCP 指向“当前项目”，并先刷新索引，使用：
 
 ```powershell
+local-search
+```
+
+这条命令默认会：
+
+1. 使用当前目录作为项目根目录
+2. 刷新本地 LanceDB 索引
+3. 更新 Codex 的 `local-search` MCP 配置
+4. 更新 Claude Code 的 `local-search` MCP 配置
+
+指定项目目录：
+
+```powershell
+local-search -ProjectRoot D:\trae_prj\myagent
+```
+
+刷新索引后直接启动 Codex：
+
+```powershell
+local-search -ProjectRoot D:\trae_prj\myagent -LaunchCodex
+```
+
+同时写入 Claude Code 项目级 `.mcp.json`：
+
+```powershell
+local-search -ProjectRoot D:\trae_prj\myagent -ProjectClaudeConfig
+```
+
+如果只想更新 Codex，不更新 Claude Code，可以使用底层 `cpx`：
+
+```powershell
 D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot (Get-Location).Path
 ```
 
@@ -185,6 +216,12 @@ D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot (Get-Location).Path
 
 ```powershell
 cpx -ProjectRoot D:\trae_prj\myagent -Mode auto
+```
+
+如需用 `cpx` 同时注册 Claude Code：
+
+```powershell
+cpx -ProjectRoot D:\trae_prj\myagent -RegisterClaude
 ```
 
 最短启动流程一般是这条：
@@ -267,13 +304,13 @@ reranker_model: qwen3-reranker-8b
 示意：
 
 ```powershell
-claude mcp add local-search -- powershell -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\your_repo
+claude mcp add local-search powershell.exe -- -NoProfile -ExecutionPolicy Bypass -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\your_repo
 ```
 
 针对具体项目，例如：
 
 ```powershell
-claude mcp add local-search -- powershell -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\trae_prj\myagent
+claude mcp add local-search powershell.exe -- -NoProfile -ExecutionPolicy Bypass -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\trae_prj\myagent
 ```
 
 验证 Claude Code 是否接上：
@@ -304,7 +341,7 @@ claude
 
 ```powershell
 claude mcp remove local-search
-claude mcp add local-search -- powershell -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\trae_prj\myagent -DisableReranker
+claude mcp add local-search powershell.exe -- -NoProfile -ExecutionPolicy Bypass -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\trae_prj\myagent -DisableReranker
 ```
 
 也可以生成项目级 `.mcp.json`，让 Claude Code 在该项目中自动发现 MCP：

@@ -7,6 +7,7 @@ param(
     [string]$ReindexMode = "auto",
     [switch]$LaunchCodex,
     [switch]$DisableReranker,
+    [switch]$RegisterClaude,
     [switch]$WriteClaudeProjectConfig,
     [bool]$EnableAutoReindex = $true,
     [int]$AutoReindexIntervalSeconds = 5
@@ -96,26 +97,41 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Current MCP config:"
 & codex mcp get $ServerName
 
+$serverArgs = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $runScriptPath,
+    "-WorkspaceRoot", $resolvedProjectRoot,
+    "-ModelConfigPath", $resolvedModelConfigPath
+)
+if (-not $DisableReranker.IsPresent -and $resolvedRerankerConfigPath -ne "") {
+    $serverArgs += @("-RerankerConfigPath", $resolvedRerankerConfigPath)
+}
+else {
+    $serverArgs += "-DisableReranker"
+}
+if ($EnableAutoReindex) {
+    $serverArgs += @("-AutoReindex", "-AutoReindexIntervalSeconds", "$AutoReindexIntervalSeconds")
+}
+
+if ($RegisterClaude) {
+    & claude mcp remove $ServerName | Out-Null
+    $claudeAddArgs = @("mcp", "add", $ServerName, "powershell.exe", "--") + $serverArgs
+    Write-Host "Updating Claude Code MCP server: $ServerName"
+    & claude @claudeAddArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to add Claude Code MCP server configuration."
+    }
+    Write-Host "Current Claude Code MCP config:"
+    & claude mcp get $ServerName
+}
+
 if ($WriteClaudeProjectConfig) {
-    $claudeArgs = @(
-        "-File", $runScriptPath,
-        "-WorkspaceRoot", $resolvedProjectRoot,
-        "-ModelConfigPath", $resolvedModelConfigPath
-    )
-    if (-not $DisableReranker.IsPresent -and $resolvedRerankerConfigPath -ne "") {
-        $claudeArgs += @("-RerankerConfigPath", $resolvedRerankerConfigPath)
-    }
-    else {
-        $claudeArgs += "-DisableReranker"
-    }
-    if ($EnableAutoReindex) {
-        $claudeArgs += @("-AutoReindex", "-AutoReindexIntervalSeconds", "$AutoReindexIntervalSeconds")
-    }
     $mcpJson = @{
         mcpServers = @{
             $ServerName = @{
-                command = "powershell"
-                args = $claudeArgs
+                command = "powershell.exe"
+                args = $serverArgs
             }
         }
     } | ConvertTo-Json -Depth 10
