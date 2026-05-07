@@ -407,7 +407,43 @@ reranker_enabled: true
 reranker_model: qwen3-reranker-8b
 ```
 
-## 6. 新增增强能力
+## 6. 工具优先级（LLM 视角）
+
+从被调用的 LLM 视角来看，工具的价值取决于两点：**节省 token**（少读无关代码）和**减少往返轮次**（合并多次调用）。
+
+### Tier 1 — 核心，每次会话必用
+
+| 工具 | 价值 |
+|------|------|
+| **`code_exact_search`** | 查具体符号、字符串的最快路径。比 Grep/Bash grep 更准、更省 token，是使用频率最高的工具 |
+| **`file_outline`** | 打开文件前先看结构（函数/类/接口列表），然后精准定位要读的行范围。没有它 LLM 会直接 Read 整文件，每 500 行浪费约 3000 token |
+| **`open_spans`** | 按行号范围精确读取，而非展开整个文件。与 `file_outline` 配合是省 token 的黄金组合 |
+
+> 黄金组合：找到文件 → `file_outline` 看结构 → `open_spans` 读关键行。一次全文件 Read 动辄 3000 token，精准拉取只要 500。
+
+### Tier 2 — 高频使用，一轮顶 3-5 轮
+
+| 工具 | 价值 |
+|------|------|
+| **`code_context_pack`** | 实现功能前的 best first tool。一次调用完成语义召回、重排、去重、相邻合并和字符预算裁剪，替代 `code_semantic_search → 手工筛选 → open_spans × N` 的多轮操作 |
+| **`symbol_context`** | 改某个函数/类时，一次拿到定义、所有引用位置、关键片段，省掉 3-4 次单独查找和读取 |
+
+### Tier 3 — 有场景时很值
+
+| 工具 | 价值 |
+|------|------|
+| **`repo_overview`** | 任务开始时花 1 秒看项目结构，避免在错误方向浪费多轮探索 |
+| **`change_context`** | resume 中断工作时，直接拿到未提交变更的上下文，不用手动 `git diff` + 逐个读文件 |
+| **`dependency_overview`** | 快速判断技术栈和构建系统，确定用什么命令 |
+
+### Tier 4 — 偶尔用到
+
+- **`symbol_search`**：有函数名但不知定义在哪时有用，但多数场景被 `code_exact_search` 覆盖
+- **`code_semantic_search`**：无具体标识符的模糊查询，使用场景较少
+- **`kb_search` / `doc_answer_context`**：看项目文档和设计决策，仅在文档完善的仓库里有价值
+- **`index_status` / `reindex`**：排障用，正常流程不需要
+
+> **降本增效最关键的三个**：`file_outline` + `open_spans`（省 token）、`code_context_pack`（省轮次）。`code_exact_search` 是使用频率基石。
 
 - `code_context_pack`：自动完成语义召回、rerank、去重、合并相邻片段和字符预算裁剪，适合实现功能或调 bug 前获取紧凑上下文。
 - `file_outline`：返回单文件里的函数、类、接口、类型、常量和路由式声明，适合打开大文件前先定位。
