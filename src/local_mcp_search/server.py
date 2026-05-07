@@ -25,10 +25,30 @@ mcp = FastMCP(
     instructions=(
         "local-search is your PRIMARY interface for exploring this codebase. "
         "ALWAYS prefer local-search tools over Read, Grep, or Bash for code exploration. "
-        "MUST use file_outline BEFORE reading any file to understand its structure first. "
-        "After search tools return candidate paths, MUST use open_spans to fetch precise context — do NOT open entire files with Read. "
 
-        "Routing rules: "
+        "CRITICAL COST-SAVING RULES — these three habits cut token waste by 60-80%: "
+        "(1) file_outline BEFORE any Read — learn what's inside a file before pulling lines. "
+        "(2) open_spans AFTER any search — fetch only the line ranges you need, never whole files. "
+        "(3) code_context_pack as the FIRST tool for implementation tasks — one call replaces 3-5 manual searches. "
+
+        "ANTI-PATTERNS — these waste tokens and rounds, DO NOT: "
+        "- Read a file without calling file_outline first. "
+        "- Use Grep/Bash rg instead of code_exact_search for code search. "
+        "- Read an entire file when a search result already gives you line ranges → use open_spans. "
+        "- Use code_semantic_search when you have a concrete identifier → code_exact_search is faster and more accurate. "
+        "- Chain grep + Read + grep + Read manually instead of using code_context_pack. "
+
+        "TASK → FIRST TOOL: "
+        "'find where X is defined' → symbol_search. "
+        "'find all uses of X' / 'search for string X' → code_exact_search. "
+        "'implement feature Y' / 'add Z' → code_context_pack (best first tool). "
+        "'explain/refactor this function' → file_outline then symbol_context. "
+        "'what does this project use?' → dependency_overview. "
+        "'continue my work' / 'what changed?' → change_context. "
+        "'why was X designed this way?' → kb_search or doc_answer_context. "
+        "'is the index healthy?' → index_status. "
+
+        "FULL ROUTING REFERENCE: "
         "Concrete identifiers (symbol names, class names, function names, error text, config keys, routes, file names, env vars, SQL) → code_exact_search FIRST. "
         "Function/class/interface/type/enum/constant definitions → symbol_search. "
         "Similar logic, patterns, or rough functionality without exact text → code_semantic_search. "
@@ -204,7 +224,8 @@ def file_outline(path: str, max_items: int = 80) -> dict:
     description=(
         "Gather compact context for a named symbol by combining definitions, references, and opened spans. "
         "ALWAYS use this before modifying or explaining a specific function, class, interface, type, "
-        "enum, constant, or config key — it saves 3-5 separate tool calls."
+        "enum, constant, or config key — it saves 3-5 separate tool calls. "
+        "This is the single most efficient tool for understanding any named symbol before changing it."
     )
 )
 def symbol_context(
@@ -223,7 +244,8 @@ def symbol_context(
 @mcp.tool(
     description=(
         "Summarize changed files and provide compact context for current git/manifest changes. "
-        "Use this before reviewing, continuing interrupted work, or estimating impact of local edits."
+        "MUST use this when resuming interrupted work, before code review, or when you need to understand what was just edited. "
+        "After seeing changed files, follow up with open_spans to read the actual diffs in key files."
     )
 )
 def change_context(max_results: int = 30, max_chars: int | None = None) -> dict:
@@ -234,7 +256,7 @@ def change_context(max_results: int = 30, max_chars: int | None = None) -> dict:
 @mcp.tool(
     description=(
         "Summarize dependency and build configuration files such as package.json, pyproject.toml, go.mod, Dockerfile, and compose files. "
-        "Use this early when you need to understand the project's runtime, package manager, framework, or build system."
+        "MUST use this BEFORE running any build, install, or test commands — it tells you the package manager, framework, and how to invoke tools correctly."
     )
 )
 def dependency_overview(max_files: int = 12) -> dict:
