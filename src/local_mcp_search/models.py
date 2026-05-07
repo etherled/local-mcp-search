@@ -27,6 +27,17 @@ class ChunkRecord:
 
 
 @dataclass(slots=True)
+class HealthStatus:
+    status: str
+    checks: dict[str, dict]
+    issues: list[str]
+    suggested_actions: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class SearchResult:
     path: str
     line_start: int

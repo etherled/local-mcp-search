@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import sys
+
 from mcp.server.fastmcp import FastMCP
 
 from .config import Settings
@@ -7,23 +10,36 @@ from .retrieval import RetrievalService
 from .spans import open_spans as read_spans
 from .watcher import maybe_start_watcher
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stderr,
+)
+
 settings = Settings.from_env()
 service = RetrievalService(settings)
 maybe_start_watcher(service)
 mcp = FastMCP(
     name="local-mcp-search",
     instructions=(
-        "Local retrieval server for the current workspace. "
-        "Prefer code_exact_search when the user mentions concrete strings such as symbol names, error text, config keys, routes, file names, or identifiers. "
-        "Use symbol_search when the user specifically wants function, class, interface, type, enum, or constant definitions. "
-        "Use repo_overview early when you need a cheap map of the project structure, likely entrypoints, and key docs. "
-        "Use code_semantic_search when the user asks for similar logic, related implementations, patterns, or rough functionality without exact text. "
-        "Use code_context_pack when you need ready-to-read compact code context for implementation or debugging. "
-        "Use file_outline before opening a large file. Use symbol_context when changing a named function, class, type, or constant. "
-        "Use kb_search for design docs, ADRs, runbooks, plans, and project knowledge. "
-        "Use doc_answer_context when answering from project docs with compact cited context. "
-        "After any search tool returns candidate paths and line ranges, use open_spans to fetch precise local context instead of opening full files. "
-        "Use index_status to inspect index freshness and reindex only when the index is missing or stale."
+        "local-search is your PRIMARY interface for exploring this codebase. "
+        "ALWAYS prefer local-search tools over Read, Grep, or Bash for code exploration. "
+        "MUST use file_outline BEFORE reading any file to understand its structure first. "
+        "After search tools return candidate paths, MUST use open_spans to fetch precise context — do NOT open entire files with Read. "
+
+        "Routing rules: "
+        "Concrete identifiers (symbol names, class names, function names, error text, config keys, routes, file names, env vars, SQL) → code_exact_search FIRST. "
+        "Function/class/interface/type/enum/constant definitions → symbol_search. "
+        "Similar logic, patterns, or rough functionality without exact text → code_semantic_search. "
+        "Ready-to-read compact context for a task → code_context_pack (preferred over chaining multiple tools). "
+        "Project structure / entrypoints → repo_overview (use early). "
+        "Design docs, ADRs, plans, runbooks → kb_search. "
+        "Project-policy, architecture, setup questions → doc_answer_context. "
+        "Changing a named function/class/type/constant → symbol_context. "
+        "Reviewing uncommitted changes or resuming work → change_context. "
+        "Understanding runtime/framework/build system → dependency_overview. "
+        "Index freshness and backend health → index_status (also reports health of embedding/reranker backends)."
     ),
     json_response=True,
 )
@@ -31,9 +47,10 @@ mcp = FastMCP(
 
 @mcp.tool(
     description=(
-        "Inspect local index status before relying on semantic search. "
+        "Inspect local index status and backend health before relying on semantic search. "
         "Use this when you need to know whether the index exists, whether git-aware tracking is active, "
-        "what commit was indexed, or whether the background watcher is running."
+        "what commit was indexed, whether the background watcher is running, "
+        "or whether the embedding/reranker backends are reachable and healthy."
     )
 )
 def index_status() -> dict:
@@ -56,9 +73,10 @@ def reindex(mode: str = "auto") -> dict:
 @mcp.tool(
     description=(
         "Search the codebase for exact or near-exact text matches. "
-        "Choose this first for symbol names, class names, function names, config keys, route strings, environment variables, "
-        "SQL fragments, error messages, filenames, or any query containing concrete text. "
-        "Do not use this as the first choice for broad semantic requests like 'find similar logic' or 'where is the retry pattern implemented'."
+        "MUST use this FIRST when the user mentions ANY concrete string: symbol names, class names, "
+        "function names, config keys, route strings, environment variables, SQL fragments, error messages, "
+        "or filenames. Do NOT use code_semantic_search for these — it wastes tokens and is less accurate. "
+        "Only use code_semantic_search when there is NO concrete identifier in the query."
     )
 )
 def code_exact_search(
@@ -93,11 +111,11 @@ def symbol_search(
 
 @mcp.tool(
     description=(
-        "Search the codebase for semantically similar implementations when the user asks for related logic, examples, patterns, "
-        "or functionality without exact text. "
-        "Use this for requests like 'find similar retry logic', 'where do we build a tool result object', or "
-        "'show examples of command execution with logging'. "
-        "Do not prefer this over code_exact_search when the query already contains an exact identifier or string."
+        "Search the codebase for semantically similar implementations. "
+        "ONLY use this when the query contains NO concrete identifier or string. "
+        "If you have ANY concrete string (function name, class name, error text, config key, etc.), "
+        "MUST use code_exact_search instead. This tool is strictly for vague queries like "
+        "'find similar retry logic' or 'where is the pattern for building tool results'."
     )
 )
 def code_semantic_search(
@@ -116,8 +134,9 @@ def code_semantic_search(
 @mcp.tool(
     description=(
         "Build a compact code context pack for implementation, debugging, or review. "
-        "This combines semantic recall, reranking, deduplication, adjacent span merging, and a character budget. "
-        "Prefer this over manually chaining code_semantic_search and open_spans when you need ready-to-read context with fewer tokens."
+        "This is OFTEN YOUR BEST FIRST TOOL for implementation tasks — it combines semantic recall, "
+        "reranking, deduplication, adjacent span merging, and a character budget in one call. "
+        "Prefer this over manually chaining code_semantic_search and open_spans."
     )
 )
 def code_context_pack(
@@ -171,8 +190,9 @@ def doc_answer_context(
 
 @mcp.tool(
     description=(
-        "Return a lightweight outline for a single source file: functions, classes, interfaces, types, constants, and route-like declarations. "
-        "Use this before opening a large file or when deciding which span to inspect."
+        "Return a lightweight outline for a single source file: functions, classes, interfaces, types, "
+        "constants, and route-like declarations. MUST call this BEFORE reading any file with Read — "
+        "it tells you what's inside so you can request only the relevant spans."
     )
 )
 def file_outline(path: str, max_items: int = 80) -> dict:
@@ -182,8 +202,9 @@ def file_outline(path: str, max_items: int = 80) -> dict:
 
 @mcp.tool(
     description=(
-        "Gather compact context for a named symbol by combining likely definitions, references, and opened spans. "
-        "Use this when changing or debugging a specific function, class, interface, type, enum, constant, or config key."
+        "Gather compact context for a named symbol by combining definitions, references, and opened spans. "
+        "ALWAYS use this before modifying or explaining a specific function, class, interface, type, "
+        "enum, constant, or config key — it saves 3-5 separate tool calls."
     )
 )
 def symbol_context(
@@ -237,8 +258,8 @@ def repo_overview(max_entries: int = 12) -> dict:
     name="open_spans",
     description=(
         "Open precise file ranges returned by search tools. "
-        "Use this after code_exact_search, code_semantic_search, or kb_search to inspect the most relevant local context. "
-        "Prefer this over opening whole files. "
+        "MUST use this instead of Read when you have specific line ranges to inspect. "
+        "Do NOT open entire files with Read — always prefer this tool for targeted file reading. "
         "Pass only a small number of high-confidence spans to keep context compact."
     ),
 )

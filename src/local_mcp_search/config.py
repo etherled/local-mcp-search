@@ -18,6 +18,7 @@ DEFAULT_IGNORE_DIRS = {
     ".nuxt",
     "target",
     ".mcp-index",
+    "__pycache__",
 }
 
 CODE_EXTENSIONS = {
@@ -67,6 +68,7 @@ class Settings:
     embedding_base_url: str
     embedding_model: str
     embedding_api_key: str
+    embedding_timeout_seconds: int
     embedding_dimensions: int | None
     reranker_enabled: bool
     reranker_base_url: str
@@ -105,6 +107,7 @@ class Settings:
             ),
             embedding_api_key=os.environ.get("EMBEDDING_API_KEY", ""),
             embedding_dimensions=_get_int("EMBEDDING_DIMENSIONS"),
+            embedding_timeout_seconds=_get_int("EMBEDDING_TIMEOUT_SECONDS", 10) or 10,
             reranker_enabled=_get_bool("MCP_SEARCH_RERANKER_ENABLED", True),
             reranker_base_url=os.environ.get("RERANKER_BASE_URL", ""),
             reranker_model=os.environ.get("RERANKER_MODEL", ""),

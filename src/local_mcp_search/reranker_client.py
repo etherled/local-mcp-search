@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
@@ -7,6 +8,8 @@ from typing import Any
 from openai import OpenAI
 
 from .config import Settings
+
+logger = logging.getLogger("local_mcp_search.reranker_client")
 
 
 @dataclass(slots=True)
@@ -113,3 +116,45 @@ class RerankerClient:
         if len(self._cache) >= self.cache_max_entries:
             self._cache.pop(next(iter(self._cache)))
         self._cache[key] = score
+
+    def health_probe(self) -> dict[str, Any]:
+        if not self.enabled:
+            return {
+                "ok": True,
+                "reachable": False,
+                "reason": "disabled",
+                "model_name": self._model,
+                "latency_ms": 0,
+                "error": None,
+            }
+        result: dict[str, Any] = {
+            "ok": False,
+            "reachable": False,
+            "model_found": False,
+            "model_name": self._model,
+            "latency_ms": 0,
+            "error": None,
+        }
+        try:
+            import time
+
+            logger.info("health_probe(reranker): probing %s...", self._client.base_url)
+            start = time.monotonic()
+            response = self._client.get("models", cast_to=dict[str, Any])
+            elapsed = time.monotonic() - start
+            logger.info("health_probe(reranker): response in %.1fms", elapsed * 1000)
+            result["reachable"] = True
+            result["latency_ms"] = round(elapsed * 1000)
+            model_ids = [m.get("id", "") for m in response.get("data", [])]
+            if self._model in model_ids:
+                result["model_found"] = True
+                result["ok"] = True
+            else:
+                result["error"] = (
+                    f"Model '{self._model}' not found on server. "
+                    f"Available: {model_ids[:5]}"
+                )
+        except Exception as exc:
+            logger.warning("health_probe(reranker): failed: %s", exc)
+            result["error"] = str(exc)
+        return result
