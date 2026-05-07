@@ -35,4 +35,5 @@ if ($AutoReindex.IsPresent) {
     $env:MCP_SEARCH_AUTO_REINDEX_INTERVAL_SECONDS = "$AutoReindexIntervalSeconds"
 }
 
-python -m local_mcp_search
+$logPath = Join-Path $env:TEMP "local-mcp-search.log"
+python -m local_mcp_search 2> $logPath

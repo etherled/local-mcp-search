@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+
+logger = logging.getLogger("local_mcp_search.retrieval")
 
 from .config import Settings
 from .context_pack import build_context_pack
@@ -26,13 +30,188 @@ class RetrievalService:
         self._watcher_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
+    # -- health helpers --------------------------------------------------
+
+    @staticmethod
+    def _compute_overall_health(
+        embedding_health: dict,
+        reranker_health: dict,
+        index_health: dict,
+    ) -> str:
+        if not embedding_health["reachable"] and index_health.get("ok") is None:
+            return "unhealthy"
+        if (
+            not embedding_health["reachable"]
+            or not embedding_health["ok"]
+            or (reranker_health.get("reachable") is False
+                and reranker_health.get("reason") != "disabled")
+            or index_health.get("stale")
+        ):
+            return "degraded"
+        return "healthy"
+
+    @staticmethod
+    def _index_health_check(
+        status: dict,
+        embedding_health: dict,
+    ) -> dict:
+        if not status.get("index_exists"):
+            if not embedding_health["reachable"]:
+                return {
+                    "ok": None,
+                    "reason": "embedding_unavailable",
+                    "message": "Cannot build index: embedding server unreachable.",
+                }
+            return {
+                "ok": False,
+                "reason": "missing",
+                "message": "Index has not been built yet.",
+            }
+        if status.get("index_may_be_stale"):
+            return {
+                "ok": True,
+                "stale": True,
+                "changed_path_count": status.get("changed_path_count"),
+                "message": f"Index may be stale: {status.get('changed_path_count', '?')} files changed.",
+            }
+        return {"ok": True, "stale": False}
+
+    @staticmethod
+    def _collect_issues(
+        status: dict,
+        embedding_health: dict,
+        reranker_health: dict,
+        index_health: dict,
+    ) -> list[str]:
+        issues: list[str] = []
+        if not embedding_health["reachable"]:
+            issues.append(
+                "Embedding server is unreachable — code_semantic_search and kb_search will fail."
+            )
+        elif not embedding_health["ok"]:
+            issues.append(
+                f"Embedding model '{embedding_health['model_name']}' not found on server."
+            )
+        if (
+            reranker_health.get("reachable") is False
+            and reranker_health.get("reason") != "disabled"
+        ):
+            issues.append(
+                "Reranker is enabled but unreachable — will fall back to vector scores."
+            )
+        if index_health.get("stale"):
+            count = status.get("changed_path_count", "?")
+            issues.append(f"Index is stale: {count} files changed since last index.")
+        if not status.get("index_exists"):
+            issues.append("Index has not been built — run reindex to enable semantic search.")
+        return issues
+
+    @staticmethod
+    def _collect_actions(
+        status: dict,
+        embedding_health: dict,
+        reranker_health: dict,
+        index_health: dict,
+    ) -> list[str]:
+        actions: list[str] = []
+        if not embedding_health["reachable"]:
+            actions.append("Start your local embedding server (e.g. LM Studio) and load the embedding model.")
+        elif not embedding_health["ok"]:
+            actions.append(
+                f"Load model '{embedding_health['model_name']}' in your embedding server."
+            )
+        if not status.get("index_exists"):
+            if embedding_health["reachable"]:
+                actions.append("reindex auto")
+        elif status.get("index_may_be_stale"):
+            actions.append("reindex auto")
+        if (
+            reranker_health.get("reachable") is False
+            and reranker_health.get("reason") != "disabled"
+        ):
+            actions.append(
+                "Check reranker server status, or set MCP_SEARCH_RERANKER_ENABLED=false to disable."
+            )
+        return actions
+
+    # -- public API -----------------------------------------------------
+
     def index_status(self) -> dict:
-        with self._reindex_lock:
-            status = self.index_store.status()
+        t0 = time.monotonic()
+        logger.info("index_status: trying to acquire lock (0.5s timeout)...")
+        reindex_in_progress = False
+        if self._reindex_lock.acquire(timeout=0.5):
+            try:
+                status = self.index_store.status(quick=True)
+            finally:
+                self._reindex_lock.release()
+        else:
+            logger.warning("index_status: reindex in progress, returning shallow status")
+            reindex_in_progress = True
+            status = {
+                "repo_root": str(self.settings.workspace_root),
+                "index_path": str(self.index_store.db_dir),
+                "index_exists": self.index_store.metadata_path.exists(),
+                "reindex_in_progress": True,
+                "note": "A reindex is currently running; freshness check skipped.",
+            }
+        t1 = time.monotonic()
+        logger.info("index_status: status fetch took %.1fms (reindex_in_progress=%s)",
+                    (t1 - t0) * 1000, reindex_in_progress)
         status["auto_reindex_enabled"] = self.settings.auto_reindex_enabled
         status["watcher_running"] = self._watcher_thread is not None and self._watcher_thread.is_alive()
         status["reranker_enabled"] = self.reranker_client.enabled
         status["reranker_model"] = self.settings.reranker_model if self.reranker_client.enabled else None
+
+        embedding_health: dict = {"ok": False, "reachable": False, "error": "health probe skipped"}
+        reranker_health: dict = {"ok": False, "reachable": False, "error": "health probe skipped"}
+
+        logger.info("index_status: starting health probes (embedding + reranker)...")
+        pool = ThreadPoolExecutor(max_workers=2)
+        try:
+            emb_future: Future = pool.submit(self.embedding_client.health_probe)
+            rerank_future: Future = pool.submit(self.reranker_client.health_probe)
+            for name, fut in [("embedding", emb_future), ("reranker", rerank_future)]:
+                try:
+                    t_probe = time.monotonic()
+                    result = fut.result(timeout=3)
+                    elapsed_ms = (time.monotonic() - t_probe) * 1000
+                    logger.info("index_status: %s health probe completed in %.1fms", name, elapsed_ms)
+                    if name == "embedding":
+                        embedding_health = result
+                    else:
+                        reranker_health = result
+                except FutureTimeoutError:
+                    logger.warning("index_status: %s health probe timed out after 3s", name)
+                    if name == "embedding":
+                        embedding_health = {"ok": False, "reachable": False, "error": "probe timed out after 3s"}
+                    else:
+                        reranker_health = {"ok": False, "reachable": False, "error": "probe timed out after 3s"}
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+        t2 = time.monotonic()
+        logger.info("index_status: health probes took %.1fms total", (t2 - t1) * 1000)
+
+        index_health = self._index_health_check(status, embedding_health)
+
+        status["health"] = {
+            "status": self._compute_overall_health(
+                embedding_health, reranker_health, index_health
+            ),
+            "checks": {
+                "index": index_health,
+                "embedding": embedding_health,
+                "reranker": reranker_health,
+            },
+            "issues": self._collect_issues(
+                status, embedding_health, reranker_health, index_health
+            ),
+            "suggested_actions": self._collect_actions(
+                status, embedding_health, reranker_health, index_health
+            ),
+        }
+
         return status
 
     def reindex(self, mode: str = "auto") -> dict:

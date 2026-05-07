@@ -8,7 +8,7 @@ param(
     [switch]$DisableReranker,
     [switch]$RegisterClaude,
     [switch]$WriteClaudeProjectConfig,
-    [bool]$EnableAutoReindex = $true,
+    [bool]$EnableAutoReindex = $false,
     [int]$AutoReindexIntervalSeconds = 5,
     [switch]$Launch,
     [switch]$LaunchCodex,

@@ -92,8 +92,9 @@ python -m local_mcp_search.cli reindex --mode incremental
 说明：
 
 - `auto` 为默认值
-- 在 Git 仓库里，`auto` 会结合 `last_indexed_commit`、已暂存变更、未暂存变更、未跟踪文件来判断受影响路径
-- 在非 Git 目录里，`auto` 会退化为基于文件 `mtime/size` 的 manifest 对比
+- 在 Git 仓库里，候选文件来自 `git ls-files --cached --others --exclude-standard`，因此会遵守 `.gitignore`
+- `auto` 会结合 `last_indexed_commit` 和当前文件 manifest 判断受影响路径；已索引过的未提交文件不会反复触发 stale
+- 在非 Git 目录里，`auto` 会退化为基于文件 `size/sha256` 的 manifest 对比
 
 查看状态：
 

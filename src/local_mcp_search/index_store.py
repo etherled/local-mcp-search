@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import time
 import uuid
+from hashlib import sha256
 from pathlib import Path
 
 import lancedb
@@ -12,6 +14,8 @@ from .chunking import chunk_code_text, chunk_kb_text, detect_doc_type, detect_la
 from .config import DEFAULT_IGNORE_DIRS, Settings
 from .embedding_client import EmbeddingClient
 from .models import SearchResult
+
+logger = logging.getLogger("local_mcp_search.index_store")
 
 
 class IndexStore:
@@ -22,8 +26,9 @@ class IndexStore:
         self.metadata_path = settings.index_dir / "metadata.json"
         self.table_name = "chunks"
 
-    def status(self) -> dict:
+    def status(self, *, quick: bool = False) -> dict:
         if not self.metadata_path.exists():
+            logger.info("status: no index found at %s", self.metadata_path)
             return {
                 "repo_root": str(self.settings.workspace_root),
                 "index_exists": False,
@@ -31,14 +36,30 @@ class IndexStore:
                 "git_available": is_git_repo(self.settings.workspace_root),
             }
 
+        t0 = time.monotonic()
         payload = self._read_metadata()
-        changed_paths = self._detect_changed_paths()
-        changed_count = len(changed_paths) if changed_paths is not None else None
+        t1 = time.monotonic()
+        logger.info("status: _read_metadata took %.1fms", (t1 - t0) * 1000)
+        if quick:
+            logger.info("status: quick=True, skipping _detect_changed_paths")
+            changed_count: int | None = None
+            freshness_skipped = True
+            git_available = (self.settings.workspace_root / ".git").exists()
+        else:
+            logger.info("status: detecting changed paths...")
+            changed_paths = self._detect_changed_paths()
+            t2 = time.monotonic()
+            logger.info("status: _detect_changed_paths took %.1fms, %d paths changed",
+                         (t2 - t1) * 1000,
+                         len(changed_paths) if changed_paths else -1)
+            changed_count = len(changed_paths) if changed_paths is not None else None
+            freshness_skipped = False
+            git_available = is_git_repo(self.settings.workspace_root)
         return {
             "repo_root": str(self.settings.workspace_root),
             "index_exists": True,
             "index_path": str(self.db_dir),
-            "git_available": is_git_repo(self.settings.workspace_root),
+            "git_available": git_available,
             "indexed_at": payload.get("indexed_at"),
             "embedding_model": payload.get("embedding_model"),
             "embedding_dimensions": payload.get("embedding_dimensions"),
@@ -47,11 +68,12 @@ class IndexStore:
             "kb_chunk_count": payload.get("kb_chunk_count", 0),
             "last_indexed_commit": payload.get("last_indexed_commit"),
             "tracked_file_count": len(payload.get("file_manifest", {})),
-            "index_may_be_stale": changed_count is None or changed_count > 0,
+            "index_may_be_stale": None if freshness_skipped else (changed_count is None or changed_count > 0),
             "changed_path_count": changed_count,
-            "suggested_action": "reindex auto"
-            if changed_count is None or changed_count > 0
-            else None,
+            "freshness_check_skipped": freshness_skipped,
+            "suggested_action": "reindex auto to verify freshness"
+            if freshness_skipped
+            else ("reindex auto" if (changed_count is None or changed_count > 0) else None),
         }
 
     def rebuild(self, mode: str = "auto") -> dict:
@@ -281,19 +303,30 @@ class IndexStore:
         if not self.metadata_path.exists():
             return None
 
+        t0 = time.monotonic()
         metadata = self._read_metadata()
         old_manifest = metadata.get("file_manifest", {})
+        logger.info("_detect_changed_paths: building file manifest (old has %d entries)...",
+                     len(old_manifest))
         current_manifest = build_file_manifest(
             self.settings.workspace_root,
             self.settings.max_file_bytes,
         )
+        t1 = time.monotonic()
+        logger.info("_detect_changed_paths: build_file_manifest took %.1fms, %d files indexed",
+                     (t1 - t0) * 1000, len(current_manifest))
         manifest_changed = diff_manifests(old_manifest, current_manifest)
+        logger.info("_detect_changed_paths: diff_manifests found %d changed", len(manifest_changed))
 
         if is_git_repo(self.settings.workspace_root):
+            t2 = time.monotonic()
             git_changed = get_git_changed_paths(
                 self.settings.workspace_root,
                 metadata.get("last_indexed_commit"),
             )
+            logger.info("_detect_changed_paths: get_git_changed_paths took %.1fms, %d changed",
+                         (time.monotonic() - t2) * 1000,
+                         len(git_changed) if git_changed else -1)
             if git_changed is None:
                 return manifest_changed
             return manifest_changed.union(git_changed)
@@ -347,10 +380,31 @@ class IndexStore:
 
 
 def iter_candidate_files(root: Path, max_file_bytes: int):
+    git_paths = get_git_indexed_paths(root)
+    if git_paths is not None:
+        for rel_path in sorted(git_paths):
+            if has_ignored_part(rel_path):
+                continue
+            path = root / rel_path
+            if not path.is_file():
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size > max_file_bytes:
+                continue
+            yield path
+        return
+
     for path in root.rglob("*"):
         if not path.is_file():
             continue
-        if any(part in DEFAULT_IGNORE_DIRS for part in path.parts):
+        try:
+            rel_path = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if has_ignored_part(rel_path):
             continue
         try:
             size = path.stat().st_size
@@ -363,16 +417,25 @@ def iter_candidate_files(root: Path, max_file_bytes: int):
 
 def build_file_manifest(root: Path, max_file_bytes: int) -> dict[str, dict]:
     manifest: dict[str, dict] = {}
+    file_count = 0
+    t_start = time.monotonic()
     for path in iter_candidate_files(root, max_file_bytes):
         rel_path = path.relative_to(root).as_posix()
         try:
             stat = path.stat()
+            digest = file_sha256(path)
         except OSError:
             continue
         manifest[rel_path] = {
             "mtime_ns": stat.st_mtime_ns,
             "size": stat.st_size,
+            "sha256": digest,
         }
+        file_count += 1
+        if file_count % 500 == 0:
+            t_now = time.monotonic()
+            logger.info("build_file_manifest: %d files scanned, total elapsed %.1fms",
+                         file_count, (t_now - t_start) * 1000)
     return manifest
 
 
@@ -380,9 +443,20 @@ def diff_manifests(old: dict[str, dict], new: dict[str, dict]) -> set[str]:
     changed: set[str] = set()
     all_paths = set(old) | set(new)
     for path in all_paths:
-        if old.get(path) != new.get(path):
+        old_entry = old.get(path)
+        new_entry = new.get(path)
+        if old_entry is None or new_entry is None:
+            changed.add(path)
+            continue
+        if manifest_signature(old_entry) != manifest_signature(new_entry):
             changed.add(path)
     return changed
+
+
+def manifest_signature(entry: dict) -> tuple:
+    if "sha256" in entry:
+        return (entry.get("size"), entry.get("sha256"))
+    return (entry.get("mtime_ns"), entry.get("size"))
 
 
 def is_git_repo(root: Path) -> bool:
@@ -403,45 +477,64 @@ def get_git_changed_paths(root: Path, last_indexed_commit: str | None) -> set[st
 
     changed: set[str] = set()
     if last_indexed_commit and last_indexed_commit != head:
-        diff_output = run_git(root, ["diff", "--name-only", f"{last_indexed_commit}..HEAD"])
+        diff_output = run_git(root, ["diff", "--name-only", "-z", f"{last_indexed_commit}..HEAD"])
         if diff_output is None:
             return None
         changed.update(normalize_git_paths(diff_output))
-
-    staged_output = run_git(root, ["diff", "--name-only", "--cached"])
-    unstaged_output = run_git(root, ["diff", "--name-only"])
-    untracked_output = run_git(root, ["ls-files", "--others", "--exclude-standard"])
-    deleted_output = run_git(root, ["ls-files", "--deleted"])
-
-    for output in (staged_output, unstaged_output, untracked_output, deleted_output):
-        if output is None:
-            return None
-        changed.update(normalize_git_paths(output))
 
     return changed
 
 
 def normalize_git_paths(output: str) -> set[str]:
     paths: set[str] = set()
-    for line in output.splitlines():
+    parts = output.split("\0") if "\0" in output else output.splitlines()
+    for line in parts:
         path = line.strip().replace("\\", "/")
         if path:
             paths.add(path)
     return paths
 
 
+def get_git_indexed_paths(root: Path) -> set[str] | None:
+    output = run_git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+    if output is None:
+        return None
+    return normalize_git_paths(output)
+
+
+def has_ignored_part(rel_path: str) -> bool:
+    return any(part in DEFAULT_IGNORE_DIRS for part in rel_path.split("/"))
+
+
+def file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run_git(root: Path, args: list[str]) -> str | None:
+    t0 = time.monotonic()
     try:
         completed = subprocess.run(
-            ["git", *args],
+            ["git", "-c", "core.quotePath=false", *args],
             cwd=str(root),
             capture_output=True,
             text=True,
             check=False,
             encoding="utf-8",
+            errors="replace",
+            timeout=5,
         )
     except FileNotFoundError:
         return None
+    except subprocess.TimeoutExpired:
+        logger.warning("run_git: git %s timed out after 5s", args[0])
+        return None
+    elapsed = (time.monotonic() - t0) * 1000
+    if elapsed > 1000:
+        logger.info("run_git: git %s took %.1fms", args[0], elapsed)
     if completed.returncode != 0:
         return None
     return completed.stdout
