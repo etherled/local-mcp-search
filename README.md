@@ -57,7 +57,14 @@ $env:MCP_SEARCH_RERANKER_CACHE_ENABLED="true"
 $env:MCP_SEARCH_RERANKER_CACHE_MAX_ENTRIES="5000"
 $env:MCP_SEARCH_CONTEXT_PACK_MAX_CHARS="20000"
 $env:RERANKER_TIMEOUT_SECONDS="30"
+$env:EMBEDDING_TIMEOUT_SECONDS="10"
+$env:MCP_SEARCH_CODE_CHUNK_LINES="120"
+$env:MCP_SEARCH_KB_CHUNK_CHARS="1600"
 ```
+
+> **embedding 批处理**：reindex 时会将文本块按每批 200 个（可通过 `EMBED_BATCH_SIZE` 环境变量调整）发给 embedding 服务，避免单次请求过大导致超时。
+
+> **日志文件**：每个项目使用独立的日志文件 `local-mcp-search-<项目slug>.log`，避免多项目同时运行时日志文件争用。
 
 如果已经有 `LanceDB` 旧表或索引目录，`reindex` 会覆盖重建 `chunks` 表。
 
@@ -421,5 +428,6 @@ reranker_model: qwen3-reranker-8b
 - 已支持 `full / incremental / auto` 三种重建模式
 - 已支持可选的后台自动增量更新，当前采用轮询方式
 - reranker 接口不可用时会自动回退到 LanceDB 原始向量排序
-- 大仓库下性能还不算最优，后续可继续增加原生文件事件监听和更细粒度切块
+- 大仓库下首次 reindex 仍需数分钟，后续增量 reindex 通常 <1 分钟
+- 超过 50% 文件变更时自动回退到全量重建，避免逐条删除带来的性能问题
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import sys
 import time
 import uuid
 from hashlib import sha256
@@ -16,6 +17,12 @@ from .embedding_client import EmbeddingClient
 from .models import SearchResult
 
 logger = logging.getLogger("local_mcp_search.index_store")
+
+EMBED_BATCH_SIZE = 200
+
+
+def _emit_progress(msg: str) -> None:
+    print(f"[reindex] {msg}", file=sys.stderr, flush=True)
 
 
 class IndexStore:
@@ -157,11 +164,14 @@ class IndexStore:
         return results
 
     def _full_rebuild(self) -> dict:
+        _emit_progress("full rebuild — scanning files…")
         self.settings.index_dir.mkdir(parents=True, exist_ok=True)
         self.db_dir.mkdir(parents=True, exist_ok=True)
 
         chunks = self._collect_chunks()
+        _emit_progress(f"collected {len(chunks)} chunks, embedding…")
         rows = self._embed_chunks_to_rows(chunks)
+        _emit_progress(f"embedding done, {len(rows)} rows — writing to lanceDB…")
 
         db = lancedb.connect(str(self.db_dir))
         db.create_table(self.table_name, data=rows, mode="overwrite")
@@ -183,31 +193,48 @@ class IndexStore:
         return status
 
     def _incremental_rebuild(self, changed_paths: set[str] | None = None) -> dict:
+        _emit_progress("incremental rebuild — detecting changes…")
         self.settings.index_dir.mkdir(parents=True, exist_ok=True)
         self.db_dir.mkdir(parents=True, exist_ok=True)
 
         if not self.metadata_path.exists():
+            _emit_progress("no existing index, falling back to full rebuild")
             return self._full_rebuild()
 
         changed_paths = changed_paths if changed_paths is not None else self._detect_changed_paths()
         if changed_paths is None:
+            _emit_progress("cannot detect changes, falling back to full rebuild")
             return self._full_rebuild()
         if not changed_paths:
+            _emit_progress("no changes detected, index is up to date")
             status = self.status()
             status["reindex_mode"] = "incremental"
             status["changed_paths"] = []
             return status
 
+        previous_metadata = self._read_metadata()
+        old_manifest_size = len(previous_metadata.get("file_manifest", {}))
+        if old_manifest_size > 0 and len(changed_paths) > old_manifest_size * 0.5:
+            _emit_progress(
+                f"{len(changed_paths)}/{old_manifest_size} files changed (>50%), "
+                "falling back to full rebuild"
+            )
+            return self._full_rebuild()
+
+        _emit_progress(f"{len(changed_paths)} files changed, updating index…")
         table = self._open_table()
-        for rel_path in sorted(changed_paths):
+        for i, rel_path in enumerate(sorted(changed_paths)):
             table.delete(f"path = '{escape_sql_string(rel_path)}'")
+            if (i + 1) % 200 == 0:
+                _emit_progress(f"deleted old rows: {i + 1}/{len(changed_paths)}…")
 
         new_chunks = self._collect_chunks_for_paths(changed_paths)
+        _emit_progress(f"collected {len(new_chunks)} new chunks, embedding…")
         rows = self._embed_chunks_to_rows(new_chunks)
         if rows:
+            _emit_progress(f"embedding done, {len(rows)} rows — writing to lanceDB…")
             table.add(rows)
 
-        previous_metadata = self._read_metadata()
         dimensions = previous_metadata.get("embedding_dimensions")
         if dimensions is None and rows:
             dimensions = len(rows[0]["vector"])
@@ -232,12 +259,18 @@ class IndexStore:
 
     def _collect_chunks(self) -> list[dict]:
         chunks: list[dict] = []
+        file_count = 0
         for path in iter_candidate_files(self.settings.workspace_root, self.settings.max_file_bytes):
             chunks.extend(self._chunk_file(path))
+            file_count += 1
+            if file_count % 500 == 0:
+                _emit_progress(f"chunking: {file_count} files, {len(chunks)} chunks so far…")
         return chunks
 
     def _collect_chunks_for_paths(self, changed_paths: set[str]) -> list[dict]:
         chunks: list[dict] = []
+        total = len(changed_paths)
+        done = 0
         for rel_path in sorted(changed_paths):
             path = self.settings.workspace_root / rel_path
             if not path.exists() or not path.is_file():
@@ -249,6 +282,9 @@ class IndexStore:
             if size > self.settings.max_file_bytes:
                 continue
             chunks.extend(self._chunk_file(path))
+            done += 1
+            if done % 500 == 0:
+                _emit_progress(f"chunking changed files: {done}/{total}, {len(chunks)} chunks…")
         return chunks
 
     def _chunk_file(self, path: Path) -> list[dict]:
@@ -278,26 +314,34 @@ class IndexStore:
         return chunks
 
     def _embed_chunks_to_rows(self, chunks: list[dict]) -> list[dict]:
-        texts = [item["text"] for item in chunks]
-        embeddings = self.embedding_client.embed_texts(texts) if texts else []
-        rows: list[dict] = []
-        for chunk, embedding in zip(chunks, embeddings):
-            rows.append(
-                {
-                    "chunk_id": chunk["chunk_id"],
-                    "doc_type": chunk["doc_type"],
-                    "path": chunk["path"],
-                    "language": chunk.get("language"),
-                    "symbol": chunk.get("symbol"),
-                    "line_start": chunk["line_start"],
-                    "line_end": chunk["line_end"],
-                    "title": chunk.get("title"),
-                    "section": chunk.get("section"),
-                    "text": chunk["text"],
-                    "vector": embedding,
-                }
-            )
-        return rows
+        if not chunks:
+            return []
+
+        total = len(chunks)
+        all_rows: list[dict] = []
+        for batch_start in range(0, total, EMBED_BATCH_SIZE):
+            batch_end = min(batch_start + EMBED_BATCH_SIZE, total)
+            batch = chunks[batch_start:batch_end]
+            texts = [item["text"] for item in batch]
+            _emit_progress(f"embedding batch {batch_start + 1}-{batch_end}/{total}…")
+            embeddings = self.embedding_client.embed_texts(texts)
+            for chunk, embedding in zip(batch, embeddings):
+                all_rows.append(
+                    {
+                        "chunk_id": chunk["chunk_id"],
+                        "doc_type": chunk["doc_type"],
+                        "path": chunk["path"],
+                        "language": chunk.get("language"),
+                        "symbol": chunk.get("symbol"),
+                        "line_start": chunk["line_start"],
+                        "line_end": chunk["line_end"],
+                        "title": chunk.get("title"),
+                        "section": chunk.get("section"),
+                        "text": chunk["text"],
+                        "vector": embedding,
+                    }
+                )
+        return all_rows
 
     def _detect_changed_paths(self) -> set[str] | None:
         if not self.metadata_path.exists():
@@ -306,6 +350,7 @@ class IndexStore:
         t0 = time.monotonic()
         metadata = self._read_metadata()
         old_manifest = metadata.get("file_manifest", {})
+        _emit_progress(f"scanning {len(old_manifest)} tracked files for changes…")
         logger.info("_detect_changed_paths: building file manifest (old has %d entries)...",
                      len(old_manifest))
         current_manifest = build_file_manifest(
@@ -313,6 +358,7 @@ class IndexStore:
             self.settings.max_file_bytes,
         )
         t1 = time.monotonic()
+        _emit_progress(f"file scan done ({t1 - t0:.1f}s), comparing manifests…")
         logger.info("_detect_changed_paths: build_file_manifest took %.1fms, %d files indexed",
                      (t1 - t0) * 1000, len(current_manifest))
         manifest_changed = diff_manifests(old_manifest, current_manifest)
@@ -434,6 +480,7 @@ def build_file_manifest(root: Path, max_file_bytes: int) -> dict[str, dict]:
         file_count += 1
         if file_count % 500 == 0:
             t_now = time.monotonic()
+            _emit_progress(f"file scan: {file_count} files, {t_now - t_start:.1f}s elapsed")
             logger.info("build_file_manifest: %d files scanned, total elapsed %.1fms",
                          file_count, (t_now - t_start) * 1000)
     return manifest

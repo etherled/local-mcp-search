@@ -35,5 +35,6 @@ if ($AutoReindex.IsPresent) {
     $env:MCP_SEARCH_AUTO_REINDEX_INTERVAL_SECONDS = "$AutoReindexIntervalSeconds"
 }
 
-$logPath = Join-Path $env:TEMP "local-mcp-search.log"
+$workspaceSlug = ($WorkspaceRoot -replace '[:\\/ ]', '-' -replace '-{2,}', '-').TrimStart('-')
+$logPath = Join-Path $env:TEMP "local-mcp-search-$workspaceSlug.log"
 python -m local_mcp_search 2> $logPath
