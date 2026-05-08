@@ -20,18 +20,24 @@ def build_context_pack(
             }
         )
 
+    merged_spans = merge_spans(spans)
     packed_items = []
     used_chars = 0
-    for span in merge_spans(spans):
+    source_chars = 0
+    trimmed_chars = 0
+    for span in merged_spans:
         try:
             opened = open_spans(workspace_root, [span], max_total_chars=max_chars)[0]
         except (FileNotFoundError, ValueError, UnicodeDecodeError):
             continue
         content = opened["content"]
+        source_chars += len(content)
         if used_chars + len(content) > max_chars:
             remaining = max_chars - used_chars
             if remaining <= 0:
+                trimmed_chars += len(content)
                 break
+            trimmed_chars += len(content) - remaining
             content = content[:remaining]
             opened["truncated"] = True
         used_chars += len(content)
@@ -43,7 +49,11 @@ def build_context_pack(
     return {
         "items": packed_items,
         "total_chars": used_chars,
-        "truncated": len(packed_items) < len(spans),
+        "source_chars": source_chars,
+        "trimmed_chars": trimmed_chars,
+        "requested_span_count": len(spans),
+        "merged_span_count": len(merged_spans),
+        "truncated": len(packed_items) < len(merged_spans),
     }
 
 

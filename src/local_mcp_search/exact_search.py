@@ -14,9 +14,17 @@ def run_exact_search(
     include_globs: list[str] | None = None,
     exclude_globs: list[str] | None = None,
     max_results: int = 10,
-) -> list[SearchResult]:
+) -> tuple[list[SearchResult], dict]:
     if not query.strip():
-        return []
+        return [], {
+            "engine": "ripgrep",
+            "query": query,
+            "returned_results": 0,
+            "max_results": max_results,
+            "include_globs": include_globs or [],
+            "exclude_globs": exclude_globs or [],
+            "fallback_used": False,
+        }
 
     command = ["rg", "--json", "-n", "-S", query, "."]
     for pattern in include_globs or []:
@@ -34,11 +42,20 @@ def run_exact_search(
             encoding="utf-8",
         )
     except FileNotFoundError:
-        return python_fallback_search(
+        results = python_fallback_search(
             workspace_root,
             query=query,
             max_results=max_results,
         )
+        return results, {
+            "engine": "python-fallback",
+            "query": query,
+            "returned_results": len(results),
+            "max_results": max_results,
+            "include_globs": include_globs or [],
+            "exclude_globs": exclude_globs or [],
+            "fallback_used": True,
+        }
 
     results: list[SearchResult] = []
     for line in completed.stdout.splitlines():
@@ -64,7 +81,15 @@ def run_exact_search(
                 why_matched="exact string match via ripgrep",
             )
         )
-    return results
+    return results, {
+        "engine": "ripgrep",
+        "query": query,
+        "returned_results": len(results),
+        "max_results": max_results,
+        "include_globs": include_globs or [],
+        "exclude_globs": exclude_globs or [],
+        "fallback_used": False,
+    }
 
 
 def python_fallback_search(

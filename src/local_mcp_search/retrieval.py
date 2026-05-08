@@ -30,6 +30,11 @@ class RetrievalService:
         self._watcher_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
+    def _with_debug(self, payload: dict, debug: dict | None = None) -> dict:
+        if self.settings.query_debug_enabled and debug is not None:
+            payload["debug"] = debug
+        return payload
+
     # -- health helpers --------------------------------------------------
 
     @staticmethod
@@ -296,14 +301,20 @@ class RetrievalService:
         exclude_globs: list[str] | None = None,
         max_results: int = 10,
     ) -> dict:
-        results = run_exact_search(
+        results, exact_debug = run_exact_search(
             self.settings.workspace_root,
             query,
             include_globs=include_globs,
             exclude_globs=exclude_globs,
             max_results=max_results,
         )
-        return {"results": [item.to_dict() for item in results]}
+        return self._with_debug(
+            {"results": [item.to_dict() for item in results]},
+            {
+                "query_type": "exact_search",
+                **exact_debug,
+            },
+        )
 
     def symbol_search(
         self,
@@ -325,16 +336,34 @@ class RetrievalService:
         language: list[str] | None = None,
         max_results: int = 8,
     ) -> dict:
+        candidate_count = self._candidate_count(max_results)
         with self._reindex_lock:
             results = self.index_store.semantic_search(
                 query,
                 doc_type="code",
                 max_results=max_results,
                 languages=language,
-                candidate_count=self._candidate_count(max_results),
+                candidate_count=candidate_count,
             )
-        results = self._rerank_results(query, results, max_results=max_results)
-        return {"results": [item.to_dict() for item in results]}
+        reranked, rerank_debug = self._rerank_results(
+            query,
+            results,
+            max_results=max_results,
+        )
+        return self._with_debug(
+            {"results": [item.to_dict() for item in reranked]},
+            {
+                "query_type": "semantic_search",
+                "doc_type": "code",
+                "query": query,
+                "language": language or [],
+                "candidate_count_requested": candidate_count,
+                "semantic_candidates_returned": len(results),
+                "returned_results": len(reranked),
+                "max_results": max_results,
+                "rerank": rerank_debug,
+            },
+        )
 
     def repo_overview(self, max_entries: int = 12) -> dict:
         return build_repo_overview(self.settings.workspace_root, max_entries=max_entries)
@@ -345,15 +374,32 @@ class RetrievalService:
         *,
         max_results: int = 5,
     ) -> dict:
+        candidate_count = self._candidate_count(max_results)
         with self._reindex_lock:
             results = self.index_store.semantic_search(
                 query,
                 doc_type="kb",
                 max_results=max_results,
-                candidate_count=self._candidate_count(max_results),
+                candidate_count=candidate_count,
             )
-        results = self._rerank_results(query, results, max_results=max_results)
-        return {"results": [item.to_dict() for item in results]}
+        reranked, rerank_debug = self._rerank_results(
+            query,
+            results,
+            max_results=max_results,
+        )
+        return self._with_debug(
+            {"results": [item.to_dict() for item in reranked]},
+            {
+                "query_type": "semantic_search",
+                "doc_type": "kb",
+                "query": query,
+                "candidate_count_requested": candidate_count,
+                "semantic_candidates_returned": len(results),
+                "returned_results": len(reranked),
+                "max_results": max_results,
+                "rerank": rerank_debug,
+            },
+        )
 
     def _candidate_count(self, max_results: int) -> int:
         if not self.reranker_client.enabled:
@@ -369,9 +415,25 @@ class RetrievalService:
         results: list[SearchResult],
         *,
         max_results: int,
-    ) -> list[SearchResult]:
-        if not self.reranker_client.enabled or len(results) <= 1:
-            return results[:max_results]
+    ) -> tuple[list[SearchResult], dict]:
+        if not self.reranker_client.enabled:
+            return results[:max_results], {
+                "enabled": False,
+                "attempted": False,
+                "reason": "disabled",
+                "input_candidates": len(results),
+                "reranked_candidates": 0,
+                "returned_results": min(len(results), max_results),
+            }
+        if len(results) <= 1:
+            return results[:max_results], {
+                "enabled": True,
+                "attempted": False,
+                "reason": "insufficient_candidates",
+                "input_candidates": len(results),
+                "reranked_candidates": 0,
+                "returned_results": min(len(results), max_results),
+            }
 
         documents = [item.text or item.snippet for item in results]
         try:
@@ -380,11 +442,26 @@ class RetrievalService:
                 documents,
                 top_n=min(max_results, len(documents)),
             )
-        except Exception:
-            return results[:max_results]
+        except Exception as exc:
+            return results[:max_results], {
+                "enabled": True,
+                "attempted": True,
+                "reason": "error",
+                "error": str(exc),
+                "input_candidates": len(results),
+                "reranked_candidates": 0,
+                "returned_results": min(len(results), max_results),
+            }
 
         if not scores:
-            return results[:max_results]
+            return results[:max_results], {
+                "enabled": True,
+                "attempted": True,
+                "reason": "empty_scores",
+                "input_candidates": len(results),
+                "reranked_candidates": 0,
+                "returned_results": min(len(results), max_results),
+            }
 
         reranked: list[SearchResult] = []
         used_indexes: set[int] = set()
@@ -404,7 +481,15 @@ class RetrievalService:
                 for index, item in enumerate(results)
                 if index not in used_indexes
             )
-        return reranked[:max_results]
+        final_results = reranked[:max_results]
+        return final_results, {
+            "enabled": True,
+            "attempted": True,
+            "reason": "ok",
+            "input_candidates": len(results),
+            "reranked_candidates": len(scores),
+            "returned_results": len(final_results),
+        }
 
     def code_context_pack(
         self,
@@ -419,13 +504,28 @@ class RetrievalService:
             language=language,
             max_results=max_results,
         )
+        target_max_chars = max_chars or self.settings.context_pack_max_chars
         pack = build_context_pack(
             self.settings.workspace_root,
             search["results"],
-            max_chars=max_chars or self.settings.context_pack_max_chars,
+            max_chars=target_max_chars,
         )
         pack["query"] = query
         pack["source_results"] = search["results"]
+        if self.settings.query_debug_enabled:
+            pack["debug"] = {
+                "query_type": "context_pack",
+                "query": query,
+                "max_results": max_results,
+                "max_chars_budget": target_max_chars,
+                "source_result_count": len(search["results"]),
+                "packed_item_count": len(pack["items"]),
+                "packed_chars": pack["total_chars"],
+                "source_chars": pack.get("source_chars"),
+                "trimmed_chars": pack.get("trimmed_chars", 0),
+                "truncated": pack["truncated"],
+                "search": search.get("debug"),
+            }
         return pack
 
     def file_outline(self, path: str, *, max_items: int = 80) -> dict:
@@ -471,10 +571,11 @@ class RetrievalService:
         max_chars: int | None = None,
     ) -> dict:
         search = self.kb_search(query, max_results=max_results)
+        target_max_chars = max_chars or self.settings.context_pack_max_chars
         pack = build_context_pack(
             self.settings.workspace_root,
             search["results"],
-            max_chars=max_chars or self.settings.context_pack_max_chars,
+            max_chars=target_max_chars,
         )
         pack["query"] = query
         pack["source_results"] = search["results"]

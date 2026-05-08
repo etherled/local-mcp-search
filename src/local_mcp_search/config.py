@@ -87,6 +87,7 @@ class Settings:
     kb_chunk_overlap: int
     auto_reindex_enabled: bool
     auto_reindex_interval_seconds: int
+    query_debug_enabled: bool
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -136,6 +137,7 @@ class Settings:
                 "MCP_SEARCH_AUTO_REINDEX_INTERVAL_SECONDS", 5
             )
             or 5,
+            query_debug_enabled=_get_bool("MCP_SEARCH_QUERY_DEBUG", False),
         )
 
 

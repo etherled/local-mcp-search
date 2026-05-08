@@ -185,6 +185,7 @@ $env:MCP_SEARCH_RERANKER_MAX_CANDIDATES="80"
 $env:MCP_SEARCH_RERANKER_CACHE_ENABLED="true"
 $env:MCP_SEARCH_RERANKER_CACHE_MAX_ENTRIES="5000"
 $env:MCP_SEARCH_CONTEXT_PACK_MAX_CHARS="20000"
+$env:MCP_SEARCH_QUERY_DEBUG="false"
 $env:EMBEDDING_TIMEOUT_SECONDS="10"
 $env:RERANKER_TIMEOUT_SECONDS="30"
 $env:MCP_SEARCH_CODE_CHUNK_LINES="120"
@@ -197,6 +198,7 @@ $env:MCP_SEARCH_KB_CHUNK_CHARS="1600"
 - 默认索引目录为 `<workspace>\.mcp-index`
 - `reindex` 时 embedding 采用批量请求，避免单次请求过大
 - 如果切换了 embedding 模型或维度，建议先跑 `reindex full`
+- 设置 `MCP_SEARCH_QUERY_DEBUG=true` 后，`code_exact_search` / `code_semantic_search` / `kb_search` / `code_context_pack` 会在返回 JSON 中附带 `debug` 字段
 - 如果模型路径未配置，`launcher` 会在启动阶段直接失败，而不是隐式回退到作者本机路径
 
 ## CLI
@@ -230,6 +232,20 @@ python -m local_mcp_search.cli status
 ```powershell
 python -m local_mcp_search.cli context-pack "登录鉴权相关实现" --max-results 6 --max-chars 12000
 ```
+
+打开查询调试输出：
+
+```powershell
+$env:MCP_SEARCH_QUERY_DEBUG="true"
+python -m local_mcp_search.cli context-pack "登录鉴权相关实现" --max-results 6 --max-chars 12000
+```
+
+开启后，返回结果会额外包含：
+
+- 精确搜索命中了多少结果
+- 语义召回请求了多少候选、实际返回多少候选
+- reranker 是否参与、参与了多少候选重排
+- `code_context_pack` 最终裁剪了多少字符
 
 ## 直接启动 MCP server
 
