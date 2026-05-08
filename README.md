@@ -499,6 +499,24 @@ health.status: healthy
 用 kb_search 查部署说明，再用 open_spans 打开最相关片段。
 ```
 
+如果客户端更偏好 MCP resources，也可以直接读这些稳定资源：
+
+- `repo://overview`
+- `repo://dependency-summary`
+- `repo://changes`
+
+它们分别对应：
+
+- 仓库结构与入口概览
+- 依赖与构建配置摘要
+- 当前变更文件与压缩上下文
+
+这类 resource 更适合：
+
+- `Claude Code` 一类更自然消费 resource 的客户端
+- 反复读取、内容相对稳定的信息
+- resume / review / setup 这类不需要参数化搜索的场景
+
 ## 工具使用顺序
 
 推荐顺序：

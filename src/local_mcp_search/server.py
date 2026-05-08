@@ -288,6 +288,51 @@ def repo_overview(max_entries: int = 12) -> dict:
     return service.repo_overview(max_entries=max_entries)
 
 
+@mcp.resource(
+    "repo://overview",
+    name="repo_overview_resource",
+    title="Repository Overview",
+    description=(
+        "Stable resource for repository structure, entrypoints, and file-type summary. "
+        "Useful when a client prefers resources over one-off tool calls."
+    ),
+    mime_type="application/json",
+)
+def repo_overview_resource() -> dict:
+    """Return repository overview as a stable MCP resource."""
+    return service.repo_overview(max_entries=20)
+
+
+@mcp.resource(
+    "repo://dependency-summary",
+    name="repo_dependency_summary_resource",
+    title="Dependency Summary",
+    description=(
+        "Stable resource for dependency and build configuration context such as pyproject.toml, "
+        "package.json, go.mod, Dockerfile, or compose files."
+    ),
+    mime_type="application/json",
+)
+def repo_dependency_summary_resource() -> dict:
+    """Return dependency/build summary as a stable MCP resource."""
+    return service.dependency_overview(max_files=12)
+
+
+@mcp.resource(
+    "repo://changes",
+    name="repo_changes_resource",
+    title="Repository Changes",
+    description=(
+        "Stable resource for current changed files and compact context. "
+        "Useful for resume, review, or handoff workflows."
+    ),
+    mime_type="application/json",
+)
+def repo_changes_resource() -> dict:
+    """Return current change summary as a stable MCP resource."""
+    return service.change_context(max_results=30)
+
+
 @mcp.tool(
     name="open_spans",
     description=(
