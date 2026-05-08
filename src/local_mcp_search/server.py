@@ -25,6 +25,8 @@ mcp = FastMCP(
     instructions=(
         "local-search is your PRIMARY interface for exploring this codebase. "
         "ALWAYS prefer local-search tools over Read, Grep, or Bash for code exploration. "
+        "For stable repo facts, setup context, or resume/review snapshots, prefer repo://overview, "
+        "repo://dependency-summary, and repo://changes before ad-hoc tool calls. "
 
         "CRITICAL COST-SAVING RULES — these three habits cut token waste by 60-80%: "
         "(1) file_outline BEFORE any Read — learn what's inside a file before pulling lines. "
@@ -37,6 +39,7 @@ mcp = FastMCP(
         "- Read an entire file when a search result already gives you line ranges → use open_spans. "
         "- Use code_semantic_search when you have a concrete identifier → code_exact_search is faster and more accurate. "
         "- Chain grep + Read + grep + Read manually instead of using code_context_pack. "
+        "- Re-run index_status or doctor repeatedly in the same thread unless search failed, the workspace changed materially, or backend health is in question. "
 
         "TASK → FIRST TOOL: "
         "'find where X is defined' → symbol_search. "
@@ -44,22 +47,26 @@ mcp = FastMCP(
         "'implement feature Y' / 'add Z' → code_context_pack (best first tool). "
         "'explain/refactor this function' → file_outline then symbol_context. "
         "'what does this project use?' → dependency_overview. "
-        "'continue my work' / 'what changed?' → change_context. "
+        "'continue my work' / 'what changed?' → repo://changes or change_context. "
         "'why was X designed this way?' → kb_search or doc_answer_context. "
         "'is the index healthy?' → index_status. "
 
         "FULL ROUTING REFERENCE: "
         "Concrete identifiers (symbol names, class names, function names, error text, config keys, routes, file names, env vars, SQL) → code_exact_search FIRST. "
+        "Mixed queries with both a concrete identifier and a vague intent → code_exact_search first to anchor on the identifier, then open_spans or code_context_pack around those files. "
         "Function/class/interface/type/enum/constant definitions → symbol_search. "
         "Similar logic, patterns, or rough functionality without exact text → code_semantic_search. "
         "Ready-to-read compact context for a task → code_context_pack (preferred over chaining multiple tools). "
-        "Project structure / entrypoints → repo_overview (use early). "
+        "Project structure / entrypoints → repo://overview or repo_overview (use early). "
+        "Dependency/build/runtime summary → repo://dependency-summary or dependency_overview. "
         "Design docs, ADRs, plans, runbooks → kb_search. "
         "Project-policy, architecture, setup questions → doc_answer_context. "
         "Changing a named function/class/type/constant → symbol_context. "
-        "Reviewing uncommitted changes or resuming work → change_context. "
+        "Reviewing uncommitted changes or resuming work → repo://changes or change_context; prioritize items with high risk, worktree scope, or high_attention group before opening code. "
         "Understanding runtime/framework/build system → dependency_overview. "
-        "Index freshness and backend health → index_status (also reports health of embedding/reranker backends)."
+        "Index freshness and backend health → index_status (also reports health of embedding/reranker backends). "
+        "If semantic search is irrelevant, empty, or unhealthy, fall back to code_exact_search for concrete anchors, then check index_status, then doctor if backend or index health looks degraded. "
+        "After one broad discovery step and one targeted read step, stop expanding search unless confidence is still low."
     ),
     json_response=True,
 )
