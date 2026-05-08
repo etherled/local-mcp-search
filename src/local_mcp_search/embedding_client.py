@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -16,6 +17,12 @@ def _build_no_proxy_handler() -> urllib.request.ProxyHandler:
 
 
 class EmbeddingClient:
+    # bge-base-zh has a 512-token context window; in embedding mode llama-server
+    # forces n_batch == n_ubatch == 512. We therefore stay conservative on input
+    # size and degrade gracefully if one chunk still trips the server limit.
+    _MAX_INPUT_CHARS = 800
+    _MIN_INPUT_CHARS = 200
+
     def __init__(self, settings: Settings) -> None:
         self._base_url = settings.embedding_base_url.rstrip("/")
         self._model = settings.embedding_model
@@ -47,17 +54,56 @@ class EmbeddingClient:
         data = json.loads(resp.read().decode())
         return [item["embedding"] for item in data["data"]]
 
-    # bge-base-zh has a 512-token context window; in embedding mode llama-server
-    # forces n_batch == n_ubatch == 512, so a single chunk that tokenizes to
-    # >512 tokens hard-fails with HTTP 500. We truncate by character count as a
-    # safe upper bound: 1000 chars (≈ <500 tokens for mixed Chinese/code).
-    _MAX_INPUT_CHARS = 1000
+    @staticmethod
+    def _is_input_too_large_error(exc: urllib.error.HTTPError) -> bool:
+        try:
+            detail = exc.read().decode(errors="replace")
+        except Exception:
+            return False
+        detail_lower = detail.lower()
+        return "too large to process" in detail_lower or "current batch size: 512" in detail_lower
+
+    @staticmethod
+    def _shrink_text(text: str) -> str:
+        if len(text) <= EmbeddingClient._MIN_INPUT_CHARS:
+            return text
+        target_len = max(EmbeddingClient._MIN_INPUT_CHARS, int(len(text) * 0.75))
+        split_at = text.rfind("\n", 0, target_len)
+        if split_at >= EmbeddingClient._MIN_INPUT_CHARS:
+            return text[:split_at]
+        return text[:target_len]
+
+    def _embed_one_with_fallback(self, text: str) -> list[float]:
+        candidate = text[: self._MAX_INPUT_CHARS]
+        while True:
+            try:
+                return self._request([candidate])[0]
+            except urllib.error.HTTPError as exc:
+                if not self._is_input_too_large_error(exc):
+                    raise
+                smaller = self._shrink_text(candidate)
+                if len(smaller) >= len(candidate):
+                    raise
+                logger.warning(
+                    "embed_texts: shrinking oversized input from %s to %s chars",
+                    len(candidate),
+                    len(smaller),
+                )
+                candidate = smaller
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
         truncated = [t[: self._MAX_INPUT_CHARS] for t in texts]
-        return self._request(truncated)
+        try:
+            return self._request(truncated)
+        except urllib.error.HTTPError as exc:
+            if not self._is_input_too_large_error(exc):
+                raise
+            logger.warning(
+                "embed_texts: batch request exceeded server token limit; retrying one input at a time"
+            )
+            return [self._embed_one_with_fallback(text) for text in truncated]
 
     def embed_text(self, text: str) -> list[float]:
         vectors = self.embed_texts([text])
