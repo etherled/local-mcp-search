@@ -620,49 +620,49 @@ class RetrievalService:
         return pack
 
     def change_context(self, *, max_results: int = 30, max_chars: int | None = None) -> dict:
-        git_status_entries = get_git_status_entries(self.settings.workspace_root) or []
-        git_status_by_path = {
-            entry["path"]: entry
-            for entry in git_status_entries
-        }
-        status_snapshot = self.index_store.status(quick=True)
-        committed_since_index = get_git_changed_paths(
-            self.settings.workspace_root,
-            status_snapshot.get("last_indexed_commit"),
-        ) or set()
-        changed_paths: set[str] | None
-        if is_git_repo(self.settings.workspace_root):
-            changed_paths = set(git_status_by_path).union(committed_since_index)
-        else:
-            changed_paths = self.index_store.detect_changed_paths_public()
-
-        if changed_paths is None:
-            return {
-                "changed_paths": None,
-                "items": [],
-                "message": "Change detection unavailable; run reindex auto or inspect git status.",
+        def _build_change_context() -> dict:
+            git_status_entries = get_git_status_entries(self.settings.workspace_root) or []
+            git_status_by_path = {
+                entry["path"]: entry
+                for entry in git_status_entries
             }
+            status_snapshot = self.index_store.status(quick=True)
+            committed_since_index = get_git_changed_paths(
+                self.settings.workspace_root,
+                status_snapshot.get("last_indexed_commit"),
+            ) or set()
+            changed_paths: set[str] | None
+            if is_git_repo(self.settings.workspace_root):
+                changed_paths = set(git_status_by_path).union(committed_since_index)
+            else:
+                changed_paths = self.index_store.detect_changed_paths_public()
 
-        git_numstat = get_git_numstat(self.settings.workspace_root) or {}
+            if changed_paths is None:
+                return {
+                    "changed_paths": None,
+                    "items": [],
+                    "message": "Change detection unavailable; run reindex auto or inspect git status.",
+                }
 
-        items = []
-        for rel_path in sorted(changed_paths):
-            path = self.settings.workspace_root / rel_path
-            status_entry = git_status_by_path.get(rel_path)
-            change_scope = self._classify_change_scope(
-                rel_path,
-                path,
-                status_entry,
-                committed_since_index,
-            )
-            change_type = self._classify_change_type(rel_path, path, status_entry, change_scope)
-            line_stats = git_numstat.get(rel_path) if change_scope == "worktree" else None
-            risk = self._assess_change_risk(rel_path, change_type, line_stats, change_scope)
-            if not path.exists() or not path.is_file():
+            git_numstat = get_git_numstat(self.settings.workspace_root) or {}
+
+            items = []
+            for rel_path in sorted(changed_paths):
+                path = self.settings.workspace_root / rel_path
+                status_entry = git_status_by_path.get(rel_path)
+                change_scope = self._classify_change_scope(
+                    rel_path,
+                    path,
+                    status_entry,
+                    committed_since_index,
+                )
+                change_type = self._classify_change_type(rel_path, path, status_entry, change_scope)
+                line_stats = git_numstat.get(rel_path) if change_scope == "worktree" else None
+                risk = self._assess_change_risk(rel_path, change_type, line_stats, change_scope)
                 items.append(
                     {
                         "path": rel_path,
-                        "status": "deleted_or_missing",
+                        "status": "deleted_or_missing" if not path.exists() or not path.is_file() else "changed",
                         "change_scope": change_scope,
                         "change_type": change_type,
                         "risk": risk,
@@ -671,67 +671,44 @@ class RetrievalService:
                         "group": self._change_group(rel_path, change_type),
                     }
                 )
-                continue
+
+            items.sort(
+                key=lambda item: (
+                    self._risk_rank(item["risk"]),
+                    self._change_type_rank(item["change_type"]),
+                    item["path"],
+                )
+            )
+            limited_items = items[:max_results]
+            grouped = self._group_change_items(limited_items)
+            return {
+                "changed_paths": sorted(changed_paths),
+                "summary": {
+                    "total_changed_paths": len(changed_paths),
+                    "returned_items": len(limited_items),
+                    "groups": {group: len(entries) for group, entries in grouped.items()},
+                    "change_types": self._count_by_key(limited_items, "change_type"),
+                    "change_scopes": self._count_by_key(limited_items, "change_scope"),
+                    "risk_levels": self._count_by_key(limited_items, "risk"),
+                },
+                "items": limited_items,
+                "grouped_items": grouped,
+                "context": [],
+            }
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = pool.submit(_build_change_context)
             try:
-                outline = build_file_outline(self.settings.workspace_root, rel_path, max_items=30)
-            except Exception:
-                outline = {"path": rel_path, "items": []}
-            items.append(
-                {
-                    "path": rel_path,
-                    "status": "changed",
-                    "change_scope": change_scope,
-                    "change_type": change_type,
-                    "risk": risk,
-                    "git_status": status_entry,
-                    "diff_summary": line_stats,
-                    "group": self._change_group(rel_path, change_type),
-                    "outline": outline["items"],
+                return future.result(timeout=5)
+            except FutureTimeoutError:
+                return {
+                    "changed_paths": None,
+                    "items": [],
+                    "message": "Change context timed out; use repo://changes or retry with smaller max_results.",
                 }
-            )
-
-        items.sort(
-            key=lambda item: (
-                self._risk_rank(item["risk"]),
-                self._change_type_rank(item["change_type"]),
-                item["path"],
-            )
-        )
-        limited_items = items[:max_results]
-
-        opened = []
-        remaining_chars = max_chars or self.settings.context_pack_max_chars
-        for item in limited_items:
-            if item["status"] != "changed":
-                continue
-            try:
-                span = open_spans(
-                    self.settings.workspace_root,
-                    [{"path": item["path"], "line_start": 1, "line_end": 80}],
-                    max_total_chars=remaining_chars,
-                )[0]
-            except Exception:
-                continue
-            remaining_chars -= len(span["content"])
-            opened.append(span)
-            if remaining_chars <= 0:
-                break
-
-        grouped = self._group_change_items(limited_items)
-        return {
-            "changed_paths": sorted(changed_paths),
-            "summary": {
-                "total_changed_paths": len(changed_paths),
-                "returned_items": len(limited_items),
-                "groups": {group: len(entries) for group, entries in grouped.items()},
-                "change_types": self._count_by_key(limited_items, "change_type"),
-                "change_scopes": self._count_by_key(limited_items, "change_scope"),
-                "risk_levels": self._count_by_key(limited_items, "risk"),
-            },
-            "items": limited_items,
-            "grouped_items": grouped,
-            "context": opened,
-        }
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     @staticmethod
     def _classify_change_scope(
