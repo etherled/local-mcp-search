@@ -207,6 +207,10 @@
 备注:
 ```
 
+建议直接落成独立文件，便于后续反复复用：
+
+- [benchmark-template.md](/D:/trae_prj/mcp_sd/benchmark-template.md:1)
+
 2. 准备 demo 仓库或 demo 录屏
 
 建议做两个短 demo：

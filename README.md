@@ -568,6 +568,10 @@ health.status: healthy
 - 最终 token 估算
 - 是否一次命中
 
+可直接使用模板：
+
+- [benchmark-template.md](/D:/trae_prj/mcp_sd/benchmark-template.md:1)
+
 ## 适合场景
 
 - 中大型仓库
