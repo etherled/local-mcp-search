@@ -115,18 +115,22 @@ class EmbeddingClient:
             "reachable": False,
             "model_found": False,
             "model_name": self._model,
+            "embedding_dimensions": None,
             "latency_ms": 0,
             "error": None,
         }
         try:
             logger.info("health_probe(embedding): probing %s...", self._base_url)
             start = time.monotonic()
-            self._request(["ping"])
+            vectors = self._request(["ping"])
             elapsed = time.monotonic() - start
             logger.info("health_probe(embedding): response in %.1fms", elapsed * 1000)
             result["reachable"] = True
+            result["model_found"] = True
             result["latency_ms"] = round(elapsed * 1000)
             result["ok"] = True
+            if vectors:
+                result["embedding_dimensions"] = len(vectors[0])
         except Exception as exc:
             logger.warning("health_probe(embedding): failed: %s", exc)
             result["error"] = str(exc)

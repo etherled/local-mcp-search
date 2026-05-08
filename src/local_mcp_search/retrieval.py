@@ -212,6 +212,22 @@ class RetrievalService:
             ),
         }
 
+        expected_dims = status.get("embedding_dimensions")
+        live_dims = embedding_health.get("embedding_dimensions")
+        if (
+            status.get("index_exists")
+            and expected_dims is not None
+            and live_dims is not None
+            and expected_dims != live_dims
+        ):
+            status["health"]["status"] = "degraded"
+            status["health"]["issues"].append(
+                f"Embedding dimension mismatch: index={expected_dims}, live={live_dims}."
+            )
+            status["health"]["suggested_actions"].append(
+                "Run reindex full after changing embedding model."
+            )
+
         return status
 
     def doctor(self) -> dict:
@@ -253,6 +269,18 @@ class RetrievalService:
             summary["suggested_actions"].append("Reranker is disabled; semantic results will skip reranking.")
         if not status.get("index_exists"):
             summary["suggested_actions"].append("Run reindex auto after backend health is green.")
+        expected_dims = status.get("embedding_dimensions")
+        live_dims = status.get("health", {}).get("checks", {}).get("embedding", {}).get("embedding_dimensions")
+        if (
+            status.get("index_exists")
+            and expected_dims is not None
+            and live_dims is not None
+            and expected_dims != live_dims
+        ):
+            summary["issues"].append(
+                f"Embedding dimension mismatch: index={expected_dims}, live={live_dims}."
+            )
+            summary["suggested_actions"].append("Run reindex full after changing embedding model.")
 
         return summary
 

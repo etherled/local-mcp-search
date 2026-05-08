@@ -196,6 +196,7 @@ $env:MCP_SEARCH_KB_CHUNK_CHARS="1600"
 - 默认 `workspace root` 为当前目录；若当前目录在 git 仓库内，会自动提升到 git 根目录
 - 默认索引目录为 `<workspace>\.mcp-index`
 - `reindex` 时 embedding 采用批量请求，避免单次请求过大
+- 如果切换了 embedding 模型或维度，建议先跑 `reindex full`
 - 如果模型路径未配置，`launcher` 会在启动阶段直接失败，而不是隐式回退到作者本机路径
 
 ## CLI
