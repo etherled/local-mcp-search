@@ -552,6 +552,22 @@ health.status: healthy
 - 基于文件类型和 diff 规模的风险等级
 - git `numstat` 摘要，方便快速判断改动体量
 
+## Benchmark
+
+如果你想验证它到底有没有“增效降本”，建议先按仓库内的 [GitHub 行动计划](</D:/trae_prj/mcp_sd/github行动计划.md:1>) 跑一组小基准：
+
+- `grep + 手工读文件` vs `code_context_pack`
+- 无 `reranker` vs 有 `reranker`
+- 不用 `local-search` vs 用 `local-search`
+
+记录最少看这几个数：
+
+- 工具调用数
+- 总耗时
+- 最终上下文字符数
+- 最终 token 估算
+- 是否一次命中
+
 ## 适合场景
 
 - 中大型仓库
