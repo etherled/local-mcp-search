@@ -12,7 +12,7 @@ from pathlib import Path
 import lancedb
 
 from .chunking import chunk_code_text, chunk_kb_text, detect_doc_type, detect_language
-from .config import DEFAULT_IGNORE_DIRS, Settings
+from .config import Settings
 from .embedding_client import EmbeddingClient
 from .models import SearchResult
 
@@ -181,7 +181,7 @@ class IndexStore:
             dimensions=dimensions,
             file_manifest=build_file_manifest(
                 self.settings.workspace_root,
-                self.settings.max_file_bytes,
+                self.settings,
             ),
             chunk_count=len(rows),
             code_chunk_count=sum(1 for row in rows if row["doc_type"] == "code"),
@@ -241,7 +241,7 @@ class IndexStore:
 
         refreshed_manifest = build_file_manifest(
             self.settings.workspace_root,
-            self.settings.max_file_bytes,
+            self.settings,
         )
         updated_metadata = self._build_metadata(
             dimensions=dimensions,
@@ -260,7 +260,7 @@ class IndexStore:
     def _collect_chunks(self) -> list[dict]:
         chunks: list[dict] = []
         file_count = 0
-        for path in iter_candidate_files(self.settings.workspace_root, self.settings.max_file_bytes):
+        for path in iter_candidate_files(self.settings.workspace_root, self.settings):
             chunks.extend(self._chunk_file(path))
             file_count += 1
             if file_count % 500 == 0:
@@ -279,7 +279,7 @@ class IndexStore:
                 size = path.stat().st_size
             except OSError:
                 continue
-            if size > self.settings.max_file_bytes:
+            if size > self.settings.effective_max_file_bytes:
                 continue
             chunks.extend(self._chunk_file(path))
             done += 1
@@ -288,7 +288,7 @@ class IndexStore:
         return chunks
 
     def _chunk_file(self, path: Path) -> list[dict]:
-        doc_type = detect_doc_type(path)
+        doc_type = detect_doc_type(path, self.settings)
         if doc_type is None:
             return []
         try:
@@ -355,7 +355,7 @@ class IndexStore:
                      len(old_manifest))
         current_manifest = build_file_manifest(
             self.settings.workspace_root,
-            self.settings.max_file_bytes,
+            self.settings,
         )
         t1 = time.monotonic()
         _emit_progress(f"file scan done ({t1 - t0:.1f}s), comparing manifests…")
@@ -425,11 +425,11 @@ class IndexStore:
         return db.open_table(self.table_name)
 
 
-def iter_candidate_files(root: Path, max_file_bytes: int):
+def iter_candidate_files(root: Path, settings: Settings):
     git_paths = get_git_indexed_paths(root)
     if git_paths is not None:
         for rel_path in sorted(git_paths):
-            if has_ignored_part(rel_path):
+            if settings.is_path_ignored(rel_path):
                 continue
             path = root / rel_path
             if not path.is_file():
@@ -438,7 +438,9 @@ def iter_candidate_files(root: Path, max_file_bytes: int):
                 size = path.stat().st_size
             except OSError:
                 continue
-            if size > max_file_bytes:
+            if size > settings.effective_max_file_bytes:
+                continue
+            if not settings.allows_language(detect_language(path)) and not settings.is_doc_path(rel_path):
                 continue
             yield path
         return
@@ -450,22 +452,24 @@ def iter_candidate_files(root: Path, max_file_bytes: int):
             rel_path = path.relative_to(root).as_posix()
         except ValueError:
             continue
-        if has_ignored_part(rel_path):
+        if settings.is_path_ignored(rel_path):
             continue
         try:
             size = path.stat().st_size
         except OSError:
             continue
-        if size > max_file_bytes:
+        if size > settings.effective_max_file_bytes:
+            continue
+        if not settings.allows_language(detect_language(path)) and not settings.is_doc_path(rel_path):
             continue
         yield path
 
 
-def build_file_manifest(root: Path, max_file_bytes: int) -> dict[str, dict]:
+def build_file_manifest(root: Path, settings: Settings) -> dict[str, dict]:
     manifest: dict[str, dict] = {}
     file_count = 0
     t_start = time.monotonic()
-    for path in iter_candidate_files(root, max_file_bytes):
+    for path in iter_candidate_files(root, settings):
         rel_path = path.relative_to(root).as_posix()
         try:
             stat = path.stat()
@@ -547,10 +551,6 @@ def get_git_indexed_paths(root: Path) -> set[str] | None:
     if output is None:
         return None
     return normalize_git_paths(output)
-
-
-def has_ignored_part(rel_path: str) -> bool:
-    return any(part in DEFAULT_IGNORE_DIRS for part in rel_path.split("/"))
 
 
 def file_sha256(path: Path) -> str:

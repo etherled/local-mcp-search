@@ -160,6 +160,9 @@ python -m local_mcp_search.cli doctor
 
 通常不需要手工设置 embedding / reranker 相关环境变量；`launcher` 会自动注入。
 
+项目级搜索/索引配置可放在工作区根目录 `.local-search.json`。
+示例见 [.local-search.example.json](/D:/trae_prj/mcp_sd/.local-search.example.json:1)。
+
 如果你要手工运行 `python -m local_mcp_search`，至少需要：
 
 ```powershell
@@ -196,10 +199,29 @@ $env:MCP_SEARCH_KB_CHUNK_CHARS="1600"
 
 - 默认 `workspace root` 为当前目录；若当前目录在 git 仓库内，会自动提升到 git 根目录
 - 默认索引目录为 `<workspace>\.mcp-index`
+- 项目级 `.local-search.json` 会覆盖部分索引/搜索行为，适合每个仓库单独调优
 - `reindex` 时 embedding 采用批量请求，避免单次请求过大
 - 如果切换了 embedding 模型或维度，建议先跑 `reindex full`
 - 设置 `MCP_SEARCH_QUERY_DEBUG=true` 后，`code_exact_search` / `code_semantic_search` / `kb_search` / `code_context_pack` 会在返回 JSON 中附带 `debug` 字段
 - 如果模型路径未配置，`launcher` 会在启动阶段直接失败，而不是隐式回退到作者本机路径
+
+`.local-search.json` 当前支持：
+
+- `ignore_dirs`: 额外忽略的目录名，按路径段匹配
+- `doc_dirs`: 文档目录白名单；这些目录下的文件会优先按知识库文档处理
+- `max_file_bytes`: 项目级大文件上限，会覆盖 `MCP_SEARCH_MAX_FILE_BYTES`
+- `languages`: 语言白名单；设置后只索引这些语言的代码文件，文档文件不受影响
+
+示例：
+
+```json
+{
+  "ignore_dirs": [".openhands", "vendor", "tmp"],
+  "doc_dirs": ["docs", "notes", "runbooks"],
+  "max_file_bytes": 200000,
+  "languages": ["python", "typescript", "javascript"]
+}
+```
 
 ## CLI
 

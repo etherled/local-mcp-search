@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from .config import CODE_EXTENSIONS, DEFAULT_IGNORE_DIRS, KB_EXTENSIONS
+from .config import CODE_EXTENSIONS, KB_EXTENSIONS, Settings
 
 
-def build_repo_overview(workspace_root: Path, max_entries: int = 12) -> dict:
+def build_repo_overview(settings: Settings, max_entries: int = 12) -> dict:
+    workspace_root = settings.workspace_root
     top_level_dirs: list[str] = []
     top_level_files: list[str] = []
     extension_counter: Counter[str] = Counter()
@@ -15,16 +16,21 @@ def build_repo_overview(workspace_root: Path, max_entries: int = 12) -> dict:
     file_count = 0
 
     for path in workspace_root.rglob("*"):
-        if any(part in DEFAULT_IGNORE_DIRS for part in path.parts):
+        try:
+            rel_path = path.relative_to(workspace_root).as_posix()
+        except ValueError:
+            continue
+        if settings.is_path_ignored(rel_path):
             continue
         if path.is_dir() and path.parent == workspace_root:
             top_level_dirs.append(path.name)
             continue
         if not path.is_file():
             continue
+        if path.stat().st_size > settings.effective_max_file_bytes:
+            continue
 
         file_count += 1
-        rel_path = path.relative_to(workspace_root).as_posix()
         suffix = path.suffix.lower()
         extension_counter[suffix or "<no_ext>"] += 1
 
@@ -32,7 +38,7 @@ def build_repo_overview(workspace_root: Path, max_entries: int = 12) -> dict:
             top_level_files.append(path.name)
 
         lowered_name = path.name.lower()
-        if suffix in KB_EXTENSIONS or lowered_name in {
+        if settings.is_doc_path(rel_path) or suffix in KB_EXTENSIONS or lowered_name in {
             "readme.md",
             "architecture.md",
             "contributing.md",
@@ -44,12 +50,17 @@ def build_repo_overview(workspace_root: Path, max_entries: int = 12) -> dict:
         }:
             doc_candidates.append(rel_path)
 
-        if suffix in CODE_EXTENSIONS and (
+        language = CODE_EXTENSIONS.get(suffix)
+        if (
+            suffix in CODE_EXTENSIONS
+            and settings.allows_language(language)
+            and (
             "main" in lowered_name
             or "app" in lowered_name
             or "server" in lowered_name
             or "index" in lowered_name
             or "cli" in lowered_name
+            )
         ):
             code_candidates.append(rel_path)
 

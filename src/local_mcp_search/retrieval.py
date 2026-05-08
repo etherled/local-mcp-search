@@ -302,7 +302,7 @@ class RetrievalService:
         max_results: int = 10,
     ) -> dict:
         results, exact_debug = run_exact_search(
-            self.settings.workspace_root,
+            self.settings,
             query,
             include_globs=include_globs,
             exclude_globs=exclude_globs,
@@ -366,7 +366,7 @@ class RetrievalService:
         )
 
     def repo_overview(self, max_entries: int = 12) -> dict:
-        return build_repo_overview(self.settings.workspace_root, max_entries=max_entries)
+        return build_repo_overview(self.settings, max_entries=max_entries)
 
     def kb_search(
         self,

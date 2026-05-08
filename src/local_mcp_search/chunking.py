@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from .config import CODE_EXTENSIONS, KB_DIR_HINTS, KB_EXTENSIONS, Settings
+from .config import CODE_EXTENSIONS, KB_EXTENSIONS, Settings
 
 
 SYMBOL_BOUNDARY_RE = re.compile(
@@ -12,12 +12,12 @@ SYMBOL_BOUNDARY_RE = re.compile(
 )
 
 
-def detect_doc_type(path: Path) -> str | None:
+def detect_doc_type(path: Path, settings: Settings) -> str | None:
     suffix = path.suffix.lower()
-    parts = {part.lower() for part in path.parts}
-    if suffix in KB_EXTENSIONS or parts.intersection(KB_DIR_HINTS):
+    rel_path = path.relative_to(settings.workspace_root).as_posix()
+    if suffix in KB_EXTENSIONS or settings.is_doc_path(rel_path):
         return "kb"
-    if suffix in CODE_EXTENSIONS:
+    if suffix in CODE_EXTENSIONS and settings.allows_language(detect_language(path)):
         return "code"
     return None
 

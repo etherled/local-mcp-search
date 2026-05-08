@@ -1,0 +1,18 @@
+{
+  "ignore_dirs": [
+    ".openhands",
+    "vendor",
+    "tmp"
+  ],
+  "doc_dirs": [
+    "docs",
+    "notes",
+    "runbooks"
+  ],
+  "max_file_bytes": 200000,
+  "languages": [
+    "python",
+    "typescript",
+    "javascript"
+  ]
+}

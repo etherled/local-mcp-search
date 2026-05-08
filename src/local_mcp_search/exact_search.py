@@ -4,11 +4,12 @@ import json
 import subprocess
 from pathlib import Path
 
+from .config import Settings
 from .models import SearchResult
 
 
 def run_exact_search(
-    workspace_root: Path,
+    settings: Settings,
     query: str,
     *,
     include_globs: list[str] | None = None,
@@ -35,7 +36,7 @@ def run_exact_search(
     try:
         completed = subprocess.run(
             command,
-            cwd=str(workspace_root),
+            cwd=str(settings.workspace_root),
             capture_output=True,
             text=True,
             check=False,
@@ -43,8 +44,10 @@ def run_exact_search(
         )
     except FileNotFoundError:
         results = python_fallback_search(
-            workspace_root,
+            settings,
             query=query,
+            include_globs=include_globs,
+            exclude_globs=exclude_globs,
             max_results=max_results,
         )
         return results, {
@@ -68,11 +71,17 @@ def run_exact_search(
         if item.get("type") != "match":
             continue
         data = item["data"]
-        submatches = data.get("submatches", [])
         text = data["lines"]["text"].rstrip()
+        rel_path = Path(data["path"]["text"]).as_posix()
+        if settings.is_path_ignored(rel_path):
+            continue
+        if settings.matches_exclude_globs(rel_path, exclude_globs):
+            continue
+        if not settings.matches_include_globs(rel_path, include_globs):
+            continue
         results.append(
             SearchResult(
-                path=Path(data["path"]["text"]).as_posix(),
+                path=rel_path,
                 line_start=data["line_number"],
                 line_end=data["line_number"],
                 symbol=None,
@@ -93,15 +102,24 @@ def run_exact_search(
 
 
 def python_fallback_search(
-    workspace_root: Path,
+    settings: Settings,
     *,
     query: str,
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
     max_results: int,
 ) -> list[SearchResult]:
     results: list[SearchResult] = []
     query_lower = query.lower()
-    for path in workspace_root.rglob("*"):
+    for path in settings.workspace_root.rglob("*"):
         if not path.is_file():
+            continue
+        rel_path = path.relative_to(settings.workspace_root).as_posix()
+        if settings.is_path_ignored(rel_path):
+            continue
+        if settings.matches_exclude_globs(rel_path, exclude_globs):
+            continue
+        if not settings.matches_include_globs(rel_path, include_globs):
             continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -112,7 +130,7 @@ def python_fallback_search(
                 continue
             results.append(
                 SearchResult(
-                    path=path.relative_to(workspace_root).as_posix(),
+                    path=rel_path,
                     line_start=line_number,
                     line_end=line_number,
                     symbol=None,
