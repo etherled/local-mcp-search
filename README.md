@@ -533,6 +533,13 @@ health.status: healthy
 - 看依赖和构建方式时用 `dependency_overview`
 - 检查索引和后端健康时用 `index_status`
 
+`change_context` 现在会额外给出：
+
+- 新增 / 修改 / 删除 / 重命名 / 未跟踪 的变更类型
+- `docs` / `code` / `config` / `tests` / `high_attention` 分组
+- 基于文件类型和 diff 规模的风险等级
+- git `numstat` 摘要，方便快速判断改动体量
+
 ## 适合场景
 
 - 中大型仓库

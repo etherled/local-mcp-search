@@ -536,6 +536,60 @@ def get_git_changed_paths(root: Path, last_indexed_commit: str | None) -> set[st
     return changed
 
 
+def get_git_status_entries(root: Path) -> list[dict] | None:
+    output = run_git(root, ["status", "--porcelain=v1", "-z"])
+    if output is None:
+        return None
+
+    entries: list[dict] = []
+    parts = output.split("\0")
+    index = 0
+    while index < len(parts):
+        raw = parts[index]
+        index += 1
+        if not raw:
+            continue
+        if len(raw) < 4:
+            continue
+        xy = raw[:2]
+        path_text = raw[3:].replace("\\", "/")
+        original_path: str | None = None
+        if "R" in xy or "C" in xy:
+            if index < len(parts):
+                original_path = path_text
+                path_text = parts[index].replace("\\", "/")
+                index += 1
+        entries.append(
+            {
+                "path": path_text,
+                "original_path": original_path,
+                "index_status": xy[0],
+                "worktree_status": xy[1],
+                "raw_status": xy,
+            }
+        )
+    return entries
+
+
+def get_git_numstat(root: Path) -> dict[str, dict] | None:
+    output = run_git(root, ["diff", "--numstat", "--"])
+    if output is None:
+        return None
+
+    stats: dict[str, dict] = {}
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        added_raw, deleted_raw, path_text = parts[0], parts[1], parts[2]
+        path_text = path_text.replace("\\", "/")
+        stats[path_text] = {
+            "added_lines": _parse_numstat_value(added_raw),
+            "deleted_lines": _parse_numstat_value(deleted_raw),
+        }
+    return stats
+
+
 def normalize_git_paths(output: str) -> set[str]:
     paths: set[str] = set()
     parts = output.split("\0") if "\0" in output else output.splitlines()
@@ -596,3 +650,12 @@ def short_snippet(text: str, limit: int = 300) -> str:
 
 def escape_sql_string(value: str) -> str:
     return value.replace("'", "''")
+
+
+def _parse_numstat_value(value: str) -> int | None:
+    if value == "-":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None

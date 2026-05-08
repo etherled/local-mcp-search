@@ -11,7 +11,13 @@ from .config import Settings
 from .context_pack import build_context_pack
 from .embedding_client import EmbeddingClient
 from .exact_search import run_exact_search
-from .index_store import IndexStore, is_git_repo
+from .index_store import (
+    IndexStore,
+    get_git_changed_paths,
+    get_git_numstat,
+    get_git_status_entries,
+    is_git_repo,
+)
 from .models import SearchResult
 from .outline import build_file_outline
 from .reranker_client import RerankerClient
@@ -590,21 +596,75 @@ class RetrievalService:
                 "message": "Change detection unavailable; run reindex auto or inspect git status.",
             }
 
+        git_status_entries = get_git_status_entries(self.settings.workspace_root) or []
+        git_status_by_path = {
+            entry["path"]: entry
+            for entry in git_status_entries
+        }
+        git_numstat = get_git_numstat(self.settings.workspace_root) or {}
+        status_snapshot = self.index_store.status(quick=True)
+        committed_since_index = get_git_changed_paths(
+            self.settings.workspace_root,
+            status_snapshot.get("last_indexed_commit"),
+        ) or set()
+
         items = []
-        for rel_path in sorted(changed_paths)[:max_results]:
+        for rel_path in sorted(changed_paths):
             path = self.settings.workspace_root / rel_path
+            status_entry = git_status_by_path.get(rel_path)
+            change_scope = self._classify_change_scope(
+                rel_path,
+                path,
+                status_entry,
+                committed_since_index,
+            )
+            change_type = self._classify_change_type(rel_path, path, status_entry, change_scope)
+            line_stats = git_numstat.get(rel_path) if change_scope == "worktree" else None
+            risk = self._assess_change_risk(rel_path, change_type, line_stats, change_scope)
             if not path.exists() or not path.is_file():
-                items.append({"path": rel_path, "status": "deleted_or_missing"})
+                items.append(
+                    {
+                        "path": rel_path,
+                        "status": "deleted_or_missing",
+                        "change_scope": change_scope,
+                        "change_type": change_type,
+                        "risk": risk,
+                        "git_status": status_entry,
+                        "diff_summary": line_stats,
+                        "group": self._change_group(rel_path, change_type),
+                    }
+                )
                 continue
             try:
                 outline = build_file_outline(self.settings.workspace_root, rel_path, max_items=30)
             except Exception:
                 outline = {"path": rel_path, "items": []}
-            items.append({"path": rel_path, "status": "changed", "outline": outline["items"]})
+            items.append(
+                {
+                    "path": rel_path,
+                    "status": "changed",
+                    "change_scope": change_scope,
+                    "change_type": change_type,
+                    "risk": risk,
+                    "git_status": status_entry,
+                    "diff_summary": line_stats,
+                    "group": self._change_group(rel_path, change_type),
+                    "outline": outline["items"],
+                }
+            )
+
+        items.sort(
+            key=lambda item: (
+                self._risk_rank(item["risk"]),
+                self._change_type_rank(item["change_type"]),
+                item["path"],
+            )
+        )
+        limited_items = items[:max_results]
 
         opened = []
         remaining_chars = max_chars or self.settings.context_pack_max_chars
-        for item in items:
+        for item in limited_items:
             if item["status"] != "changed":
                 continue
             try:
@@ -620,11 +680,139 @@ class RetrievalService:
             if remaining_chars <= 0:
                 break
 
+        grouped = self._group_change_items(limited_items)
         return {
             "changed_paths": sorted(changed_paths),
-            "items": items,
+            "summary": {
+                "total_changed_paths": len(changed_paths),
+                "returned_items": len(limited_items),
+                "groups": {group: len(entries) for group, entries in grouped.items()},
+                "change_types": self._count_by_key(limited_items, "change_type"),
+                "change_scopes": self._count_by_key(limited_items, "change_scope"),
+                "risk_levels": self._count_by_key(limited_items, "risk"),
+            },
+            "items": limited_items,
+            "grouped_items": grouped,
             "context": opened,
         }
+
+    @staticmethod
+    def _classify_change_scope(
+        rel_path: str,
+        path,
+        status_entry: dict | None,
+        committed_since_index: set[str],
+    ) -> str:
+        if status_entry is not None:
+            return "worktree"
+        if rel_path in committed_since_index:
+            return "committed_since_index"
+        if not path.exists():
+            return "missing"
+        return "manifest_only"
+
+    @staticmethod
+    def _classify_change_type(
+        path_text: str,
+        path,
+        status_entry: dict | None,
+        change_scope: str,
+    ) -> str:
+        if status_entry is not None:
+            raw = status_entry.get("raw_status", "")
+            if "R" in raw:
+                return "renamed"
+            if "A" in raw or status_entry.get("index_status") == "A":
+                return "added"
+            if "D" in raw or status_entry.get("worktree_status") == "D":
+                return "deleted"
+            if "M" in raw:
+                return "modified"
+            if "?" in raw:
+                return "untracked"
+        if change_scope == "committed_since_index":
+            return "committed_since_index"
+        if change_scope == "manifest_only":
+            return "manifest_changed"
+        if not path.exists():
+            return "deleted"
+        return "modified"
+
+    @staticmethod
+    def _assess_change_risk(
+        rel_path: str,
+        change_type: str,
+        line_stats: dict | None,
+        change_scope: str,
+    ) -> str:
+        lowered = rel_path.lower()
+        if change_type in {"deleted", "renamed"}:
+            return "high"
+        if change_scope == "committed_since_index":
+            return "medium"
+        if any(
+            token in lowered
+            for token in ("server", "config", "launcher", "index_store", "retrieval", "cli")
+        ):
+            return "high"
+        if line_stats:
+            added = line_stats.get("added_lines") or 0
+            deleted = line_stats.get("deleted_lines") or 0
+            if added + deleted >= 200:
+                return "high"
+            if added + deleted >= 40:
+                return "medium"
+        if change_type in {"added", "untracked"}:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _change_group(rel_path: str, change_type: str) -> str:
+        lowered = rel_path.lower()
+        if change_type in {"deleted", "renamed"}:
+            return "high_attention"
+        if lowered.endswith(".md") or lowered.endswith(".txt") or lowered.endswith(".rst"):
+            return "docs"
+        if "/test" in lowered or lowered.endswith("_test.py") or lowered.endswith(".spec.ts"):
+            return "tests"
+        if lowered.endswith((".json", ".toml", ".yaml", ".yml")):
+            return "config"
+        if lowered.endswith((".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java")):
+            return "code"
+        return "other"
+
+    @staticmethod
+    def _risk_rank(value: str) -> int:
+        return {"high": 0, "medium": 1, "low": 2}.get(value, 3)
+
+    @staticmethod
+    def _change_type_rank(value: str) -> int:
+        return {
+            "deleted": 0,
+            "renamed": 1,
+            "modified": 2,
+            "added": 3,
+            "untracked": 4,
+            "committed_since_index": 5,
+            "manifest_changed": 6,
+        }.get(value, 5)
+
+    @staticmethod
+    def _group_change_items(items: list[dict]) -> dict[str, list[dict]]:
+        grouped: dict[str, list[dict]] = {}
+        for item in items:
+            grouped.setdefault(item["group"], []).append(item)
+        return grouped
+
+    @staticmethod
+    def _count_by_key(items: list[dict], key: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in items:
+            value = item.get(key)
+            if not isinstance(value, str):
+                continue
+            counts[value] = counts.get(value, 0) + 1
+        return counts
 
     def dependency_overview(self, *, max_files: int = 12) -> dict:
         candidates = [
