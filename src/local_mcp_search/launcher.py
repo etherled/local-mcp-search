@@ -22,15 +22,17 @@ from pathlib import Path
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
-DEFAULT_LLAMA_SERVER = r"C:\Users\yyyx\.local\bin\llama-server.exe"
-DEFAULT_EMBED_GGUF = r"D:\models\mradermacher\bge-base-zh-GGUF\bge-base-zh.f16.gguf"
-DEFAULT_RERANK_GGUF = r"D:\models\gpustack\bge-reranker-v2-m3-GGUF\bge-reranker-v2-m3-Q8_0.gguf"
+DEFAULT_LLAMA_SERVER = "llama-server"
+DEFAULT_EMBED_GGUF = ""
+DEFAULT_RERANK_GGUF = ""
 DEFAULT_EMBED_PORT = 8887
 DEFAULT_RERANK_PORT = 8888
 EMBED_MODEL_NAME = "bge-base-zh"
 STARTUP_TIMEOUT_SECONDS = 60
 PROBE_INTERVAL_SECONDS = 1.0
 PROBE_REQUEST_TIMEOUT_SECONDS = 5.0
+PRIVATE_CONFIG_BASENAME = ".local-search.env"
+PRIVATE_CONFIG_HOME = Path.home() / ".local-mcp-search.env"
 
 
 # ── Endpoint probe ────────────────────────────────────────────────────────────
@@ -43,6 +45,53 @@ class Endpoint:
     gguf: str
     probe_path: str
     probe_body: dict
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.is_file():
+        return values
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.lower().startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def _load_private_launcher_config(workspace: str) -> dict[str, str]:
+    config: dict[str, str] = {}
+    for path in (PRIVATE_CONFIG_HOME, Path(workspace) / PRIVATE_CONFIG_BASENAME):
+        config.update(_parse_env_file(path))
+    return config
+
+
+def _resolve_launcher_setting(
+    cli_value: str | None,
+    env_key: str,
+    config: dict[str, str],
+    default: str,
+) -> str:
+    if cli_value is not None:
+        return cli_value
+    env_value = os.environ.get(env_key)
+    if env_value:
+        return env_value
+    config_value = config.get(env_key)
+    if config_value:
+        return config_value
+    return default
 
 
 def _probe(endpoint: Endpoint) -> bool:
@@ -428,10 +477,14 @@ def _normalize_argv(argv: list[str]) -> list[str]:
         "-Launch": None,
         "-disableReranker": "--disable-reranker",
         "-DisableReranker": "--disable-reranker",
+        "-skipReindex": "--skip-reindex",
+        "-SkipReindex": "--skip-reindex",
         "-registerClaude": "--register-claude",
         "-RegisterClaude": "--register-claude",
         "-writeClaudeProjectConfig": "--write-claude-project-config",
         "-WriteClaudeProjectConfig": "--write-claude-project-config",
+        "-noAutoReindex": "--skip-reindex",
+        "-NoAutoReindex": "--skip-reindex",
         "-modelConfigPath": None,   # legacy: skip value
         "-ModelConfigPath": None,
         "-rerankerConfigPath": None,
@@ -529,9 +582,9 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Local MCP search launcher (Python-only, no PowerShell)")
     parser.add_argument("--workspace", default=os.getcwd())
-    parser.add_argument("--llama-server", default=DEFAULT_LLAMA_SERVER)
-    parser.add_argument("--embed-gguf", default=DEFAULT_EMBED_GGUF)
-    parser.add_argument("--rerank-gguf", default=DEFAULT_RERANK_GGUF)
+    parser.add_argument("--llama-server", default=None)
+    parser.add_argument("--embed-gguf", default=None)
+    parser.add_argument("--rerank-gguf", default=None)
     parser.add_argument("--embed-port", type=int, default=DEFAULT_EMBED_PORT)
     parser.add_argument("--rerank-port", type=int, default=DEFAULT_RERANK_PORT)
     parser.add_argument("--disable-reranker", action="store_true")
@@ -562,6 +615,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     workspace = _resolve_workspace_root(args.workspace)
+    private_config = _load_private_launcher_config(workspace)
+    args.llama_server = _resolve_launcher_setting(
+        args.llama_server, "LOCAL_SEARCH_LLAMA_SERVER", private_config, DEFAULT_LLAMA_SERVER
+    )
+    args.embed_gguf = _resolve_launcher_setting(
+        args.embed_gguf, "LOCAL_SEARCH_EMBED_GGUF", private_config, DEFAULT_EMBED_GGUF
+    )
+    args.rerank_gguf = _resolve_launcher_setting(
+        args.rerank_gguf, "LOCAL_SEARCH_RERANK_GGUF", private_config, DEFAULT_RERANK_GGUF
+    )
     log_dir = Path(os.environ.get("TEMP", "/tmp")) / "llama-logs"
 
     # ── 1. Ensure llama-server endpoints ───────────────────────────────────

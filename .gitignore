@@ -2,6 +2,11 @@
 __pycache__/
 *.pyc
 .env
+.local-search.env
+.local-mcp-search.env
 .mcp-index/
 *.egg-info/
 resume-codex-last.ps1
+.claude/
+.mcp.json
+codex resume *.txt

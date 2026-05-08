@@ -2,6 +2,18 @@
 
 本项目提供一个本地 `STDIO MCP Server`，给 `Codex` / `Claude Code` 提供代码库与知识库检索能力。
 
+当前公开版本建议定位为：
+
+- `alpha / 0.1.x`
+- `Windows-first`
+- 面向 `Codex` / `Claude Code` 的本地检索型 MCP
+
+当前优先支持：
+
+- `Windows 10/11 x64`
+- PowerShell 工作流
+- 本地 `llama-server` 部署
+
 当前提供的 MCP tools：
 
 - `code_exact_search`
@@ -42,12 +54,43 @@ pip install -e .
 - embedding: `bge-base-zh`
 - reranker: `bge-reranker-v2-m3`
 
-默认配置：
+`launcher` 默认从以下环境变量读取模型路径；如果不设置，则会使用：
+
+- `llama-server` 作为可执行文件名
+- 空的 GGUF 路径，启动时直接报错并提示补齐
+
+同时支持私有本地回退配置，不进 git：
+
+- 工作区级：`<repo>/.local-search.env`
+- 用户级：`%USERPROFILE%/.local-mcp-search.env`
+
+读取优先级：
+
+- CLI 参数
+- 环境变量
+- 工作区私有配置
+- 用户级私有配置
+- 安全默认值
+
+建议先设置：
+
+```powershell
+$env:LOCAL_SEARCH_LLAMA_SERVER="D:\path\to\llama-server.exe"
+$env:LOCAL_SEARCH_EMBED_GGUF="D:\models\bge-base-zh.f16.gguf"
+$env:LOCAL_SEARCH_RERANK_GGUF="D:\models\bge-reranker-v2-m3-Q8_0.gguf"
+```
+
+或者写入私有配置文件：
+
+```dotenv
+LOCAL_SEARCH_LLAMA_SERVER=D:\path\to\llama-server.exe
+LOCAL_SEARCH_EMBED_GGUF=D:\models\bge-base-zh.f16.gguf
+LOCAL_SEARCH_RERANK_GGUF=D:\models\bge-reranker-v2-m3-Q8_0.gguf
+```
+
+默认端口：
 
 ```text
-llama-server: C:\Users\yyyx\.local\bin\llama-server.exe
-embedding gguf: D:\models\mradermacher\bge-base-zh-GGUF\bge-base-zh.f16.gguf
-reranker gguf: D:\models\gpustack\bge-reranker-v2-m3-GGUF\bge-reranker-v2-m3-Q8_0.gguf
 embedding port: 8887
 reranker port: 8888
 ```
@@ -62,6 +105,49 @@ reranker port: 8888
 
 ```text
 %TEMP%\llama-logs\
+```
+
+## 快速验证
+
+建议公开用户按下面顺序做最小 smoke test：
+
+1. 准备模型路径
+
+```powershell
+$env:LOCAL_SEARCH_LLAMA_SERVER="D:\path\to\llama-server.exe"
+$env:LOCAL_SEARCH_EMBED_GGUF="D:\models\bge-base-zh.f16.gguf"
+$env:LOCAL_SEARCH_RERANK_GGUF="D:\models\bge-reranker-v2-m3-Q8_0.gguf"
+```
+
+2. 刷新索引
+
+```powershell
+python -m local_mcp_search.cli reindex --mode auto
+```
+
+3. 查看状态
+
+```powershell
+python -m local_mcp_search.cli status
+```
+
+4. 启动并恢复最近 Codex 会话
+
+```powershell
+cpx
+```
+
+5. 启动并恢复最近 Claude 会话
+
+```powershell
+cpx -Claude
+```
+
+6. 检查 MCP 是否已注册
+
+```powershell
+codex mcp get local-search
+claude mcp get local-search
 ```
 
 ## 环境变量
@@ -104,6 +190,7 @@ $env:MCP_SEARCH_KB_CHUNK_CHARS="1600"
 - 默认 `workspace root` 为当前目录；若当前目录在 git 仓库内，会自动提升到 git 根目录
 - 默认索引目录为 `<workspace>\.mcp-index`
 - `reindex` 时 embedding 采用批量请求，避免单次请求过大
+- 如果模型路径未配置，`launcher` 会在启动阶段直接失败，而不是隐式回退到作者本机路径
 
 ## CLI
 
