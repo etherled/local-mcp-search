@@ -475,6 +475,18 @@ embedding_model: bge-base-zh
 health.status: healthy
 ```
 
+如果 `Codex` / `Claude Code` 里仍然报 MCP 启动失败，或 `change_context` / `repo://changes` 这类工具异常：
+
+- 先确认 `codex mcp get local-search` / `claude mcp get local-search` 指向的是当前工作区的 `.mcp-index/_mcp_server_wrapper.py`
+- 如果路径已经对了，但客户端会话还是沿用旧连接，重启一次客户端会话再试
+- 再用 `python -m local_mcp_search.cli doctor` 看 `codex_mcp_matches_workspace`、`embedding`、`reranker` 状态
+
+典型异常含义：
+
+- `codex_mcp_matches_workspace=false`：客户端还连着旧工作区或旧 wrapper
+- `change_context` 在 Windows 下报 `Invalid argument`：通常是宿主进程的 `stderr` 句柄兼容问题，升级到当前版本并重启会话即可
+- `code_context_pack` / `code_semantic_search` 报连接失败：embedding 或 reranker 本地服务没起来，不是 MCP 注册问题
+
 ## 在 Codex / Claude 里如何用
 
 进入客户端后，可以直接这样提示：

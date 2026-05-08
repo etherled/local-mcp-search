@@ -16,6 +16,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     stream=sys.stderr,
 )
+logging.raiseExceptions = False
 
 settings = Settings.from_env()
 service = RetrievalService(settings)

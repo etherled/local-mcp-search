@@ -22,7 +22,13 @@ EMBED_BATCH_SIZE = 200
 
 
 def _emit_progress(msg: str) -> None:
-    print(f"[reindex] {msg}", file=sys.stderr, flush=True)
+    stream = sys.stderr
+    if stream is None or getattr(stream, "closed", False):
+        return
+    try:
+        print(f"[reindex] {msg}", file=stream, flush=True)
+    except (OSError, ValueError, UnicodeError):
+        return
 
 
 class IndexStore:
