@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -254,7 +256,9 @@ class RetrievalService:
             "index_dir_exists": self.settings.index_dir.exists(),
             "index_metadata_exists": self.index_store.metadata_path.exists(),
             "reranker_enabled": self.reranker_client.enabled,
+            "codex_in_path": shutil.which("codex") is not None,
         }
+        checks["codex_mcp_matches_workspace"] = self._codex_mcp_matches_workspace()
 
         summary = {
             "workspace_root": str(repo_root),
@@ -276,6 +280,13 @@ class RetrievalService:
             summary["issues"].append("Workspace root is not a writable directory.")
         if not checks["index_dir_exists"]:
             summary["suggested_actions"].append("Run reindex auto to create the index directory.")
+        if checks["codex_in_path"] and checks["codex_mcp_matches_workspace"] is False:
+            summary["issues"].append(
+                "Codex MCP local-search target does not match this workspace wrapper."
+            )
+            summary["suggested_actions"].append(
+                "Re-run cpx in this workspace to refresh the local-search registration."
+            )
         if not self.reranker_client.enabled:
             summary["suggested_actions"].append("Reranker is disabled; semantic results will skip reranking.")
         if not status.get("index_exists"):
@@ -294,6 +305,27 @@ class RetrievalService:
             summary["suggested_actions"].append("Run reindex full after changing embedding model.")
 
         return summary
+
+    def _codex_mcp_matches_workspace(self) -> bool | None:
+        codex = shutil.which("codex")
+        if not codex:
+            return None
+        wrapper = (self.settings.workspace_root / ".mcp-index" / "_mcp_server_wrapper.py").resolve()
+        try:
+            result = subprocess.run(
+                [codex, "mcp", "get", "local-search"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            return None
+        if result.returncode != 0:
+            return None
+        return str(wrapper).lower() in result.stdout.lower()
 
     def reindex(self, mode: str = "auto") -> dict:
         with self._reindex_lock:

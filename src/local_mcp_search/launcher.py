@@ -237,6 +237,7 @@ def register_codex_mcp(server_name: str, server_args: list[str], workspace: str)
         print(f"[mcp] codex mcp add failed: {result.stderr.strip()}", file=sys.stderr)
     else:
         print(f"[mcp] Codex MCP registered")
+        _verify_codex_mcp_target(codex, server_name, server_args)
 
 
 def register_claude_mcp(server_name: str, server_args: list[str], workspace: str) -> None:
@@ -268,6 +269,33 @@ def write_claude_project_mcp_config(workspace: str, server_name: str, server_arg
     path = Path(workspace) / ".mcp.json"
     path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     print(f"[mcp] wrote Claude project MCP config: {path}")
+
+
+def _verify_codex_mcp_target(codex: str, server_name: str, server_args: list[str]) -> None:
+    expected = [str(Path(arg).resolve()) if Path(arg).exists() else arg for arg in server_args]
+    result = subprocess.run(
+        [codex, "mcp", "get", server_name],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        print(f"[mcp] warning: failed to verify Codex MCP target for {server_name}", file=sys.stderr)
+        return
+
+    stdout = result.stdout.lower()
+    mismatched = [
+        arg for arg in expected
+        if arg.lower() not in stdout
+    ]
+    if mismatched:
+        print(
+            "[mcp] warning: Codex MCP target does not match current workspace wrapper. "
+            f"Expected args to include: {expected}. "
+            "This usually means another project-level MCP config is overriding the global registration.",
+            file=sys.stderr,
+        )
 
 
 # ── Session lookup ────────────────────────────────────────────────────────────
