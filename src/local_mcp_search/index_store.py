@@ -101,7 +101,7 @@ class IndexStore:
         if not self.metadata_path.exists():
             return self._full_rebuild()
 
-        changed_paths = self._detect_changed_paths()
+        changed_paths = self._detect_changed_paths(emit_progress=True)
         if changed_paths is None:
             return self._full_rebuild()
         if not changed_paths:
@@ -112,7 +112,7 @@ class IndexStore:
         return self._incremental_rebuild(changed_paths)
 
     def detect_changed_paths_public(self) -> set[str] | None:
-        return self._detect_changed_paths()
+        return self._detect_changed_paths(emit_progress=False)
 
     def semantic_search(
         self,
@@ -349,14 +349,15 @@ class IndexStore:
                 )
         return all_rows
 
-    def _detect_changed_paths(self) -> set[str] | None:
+    def _detect_changed_paths(self, *, emit_progress: bool = False) -> set[str] | None:
         if not self.metadata_path.exists():
             return None
 
         t0 = time.monotonic()
         metadata = self._read_metadata()
         old_manifest = metadata.get("file_manifest", {})
-        _emit_progress(f"scanning {len(old_manifest)} tracked files for changes…")
+        if emit_progress:
+            _emit_progress(f"scanning {len(old_manifest)} tracked files for changes…")
         logger.info("_detect_changed_paths: building file manifest (old has %d entries)...",
                      len(old_manifest))
         current_manifest = build_file_manifest(
@@ -364,7 +365,8 @@ class IndexStore:
             self.settings,
         )
         t1 = time.monotonic()
-        _emit_progress(f"file scan done ({t1 - t0:.1f}s), comparing manifests…")
+        if emit_progress:
+            _emit_progress(f"file scan done ({t1 - t0:.1f}s), comparing manifests…")
         logger.info("_detect_changed_paths: build_file_manifest took %.1fms, %d files indexed",
                      (t1 - t0) * 1000, len(current_manifest))
         manifest_changed = diff_manifests(old_manifest, current_manifest)
