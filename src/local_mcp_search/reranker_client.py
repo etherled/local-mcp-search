@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
+import urllib.request
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
-from openai import OpenAI
-
 from .config import Settings
 
 logger = logging.getLogger("local_mcp_search.reranker_client")
+
+
+def _build_no_proxy_handler() -> urllib.request.ProxyHandler:
+    return urllib.request.ProxyHandler({})
 
 
 @dataclass(slots=True)
@@ -24,19 +29,14 @@ class RerankerClient:
             settings.reranker_enabled
             and bool(settings.reranker_base_url)
             and bool(settings.reranker_model)
-            and bool(settings.reranker_api_key)
         )
         self.cache_enabled = settings.reranker_cache_enabled
         self.cache_max_entries = settings.reranker_cache_max_entries
         self._cache: dict[str, float] = {}
         self._model = settings.reranker_model
-        self._client: OpenAI | None = None
-        if self.enabled:
-            self._client = OpenAI(
-                api_key=settings.reranker_api_key,
-                base_url=settings.reranker_base_url,
-                timeout=settings.reranker_timeout_seconds,
-            )
+        self._base_url = settings.reranker_base_url.rstrip("/")
+        self._timeout = settings.reranker_timeout_seconds
+        self._opener = urllib.request.build_opener(_build_no_proxy_handler())
 
     def rerank(
         self,
@@ -45,7 +45,7 @@ class RerankerClient:
         *,
         top_n: int,
     ) -> list[RerankScore]:
-        if not self.enabled or self._client is None or not documents:
+        if not self.enabled or not documents:
             return []
 
         cached_scores: dict[int, float] = {}
@@ -90,20 +90,33 @@ class RerankerClient:
         *,
         top_n: int,
     ) -> dict[int, float]:
-        response = self._client.post(
-            "/rerank",
-            body={
-                "model": self._model,
-                "query": query,
-                "documents": documents,
-                "top_n": top_n,
-            },
-            cast_to=dict[str, Any],
+        url = f"{self._base_url}/rerank"
+        body = json.dumps({"query": query, "texts": documents}).encode()
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
-        scores: dict[int, float] = {}
-        for item in response.get("results", []):
+        try:
+            resp = self._opener.open(req, timeout=self._timeout)
+            data = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            detail = ""
             try:
-                scores[int(item["index"])] = float(item["relevance_score"])
+                detail = exc.read().decode(errors="replace")[:500]
+            except Exception:
+                pass
+            logger.warning("_fetch_scores: %s %s — body: %s", url, exc, detail)
+            return {}
+        except Exception as exc:
+            logger.warning("_fetch_scores: %s failed: %s", url, exc)
+            return {}
+        results: list[dict] = data if isinstance(data, list) else data.get("results", [])
+        scores: dict[int, float] = {}
+        for item in results:
+            try:
+                scores[int(item["index"])] = float(item["score"])
             except (KeyError, TypeError, ValueError):
                 continue
         return scores
@@ -136,24 +149,20 @@ class RerankerClient:
             "error": None,
         }
         try:
-            import time
-
-            logger.info("health_probe(reranker): probing %s...", self._client.base_url)
+            logger.info("health_probe(reranker): probing %s...", self._base_url)
             start = time.monotonic()
-            response = self._client.get("models", cast_to=dict[str, Any])
+            req = urllib.request.Request(
+                f"{self._base_url}/rerank",
+                data=json.dumps({"query": "ping", "texts": ["ping"]}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            resp = self._opener.open(req, timeout=self._timeout)
             elapsed = time.monotonic() - start
             logger.info("health_probe(reranker): response in %.1fms", elapsed * 1000)
             result["reachable"] = True
             result["latency_ms"] = round(elapsed * 1000)
-            model_ids = [m.get("id", "") for m in response.get("data", [])]
-            if self._model in model_ids:
-                result["model_found"] = True
-                result["ok"] = True
-            else:
-                result["error"] = (
-                    f"Model '{self._model}' not found on server. "
-                    f"Available: {model_ids[:5]}"
-                )
+            result["ok"] = True
         except Exception as exc:
             logger.warning("health_probe(reranker): failed: %s", exc)
             result["error"] = str(exc)

@@ -1,74 +1,33 @@
 # local-mcp-search
 
-本项目提供一个最小可用的本地 `STDIO MCP Server`，用于给 `Codex` / `Claude Code` 暴露以下能力：
+本项目提供一个本地 `STDIO MCP Server`，给 `Codex` / `Claude Code` 提供代码库与知识库检索能力。
+
+当前提供的 MCP tools：
 
 - `code_exact_search`
 - `symbol_search`
 - `code_semantic_search`
-- `kb_search`
-- `repo_overview`
 - `code_context_pack`
+- `kb_search`
+- `doc_answer_context`
 - `file_outline`
 - `symbol_context`
-- `doc_answer_context`
 - `change_context`
 - `dependency_overview`
+- `repo_overview`
 - `open_spans`
 - `index_status`
 - `reindex`
 
-第一版定位：
+当前实现重点：
 
-- `code_exact_search` 基于 `ripgrep`
-- `code_semantic_search` / `kb_search` 基于本地 OpenAI 兼容 embedding 接口
-- 可选使用 `qwen3-reranker-8b` 对语义召回结果做二阶段重排
-- 向量索引采用本地 `LanceDB`
+- 精确检索基于本地 `ripgrep`
+- 语义检索基于本地 embedding
+- reranker 基于本地 llama-server 部署
+- 向量索引使用本地 `LanceDB`
+- `cpx` 统一负责启动本地模型、刷新索引、注册 MCP、恢复最近会话
 
-## 1. 环境变量
-
-建议在启动前设置：
-
-```powershell
-$env:EMBEDDING_BASE_URL="http://127.0.0.1:1234/V1"
-$env:EMBEDDING_MODEL="text-embedding-bge-base-zh"
-$env:EMBEDDING_API_KEY="your-local-api-key"
-$env:MCP_SEARCH_WORKSPACE_ROOT="D:\\your_repo"
-```
-
-启用 reranker 时额外设置：
-
-```powershell
-$env:MCP_SEARCH_RERANKER_ENABLED="true"
-$env:RERANKER_BASE_URL="https://api.lingyaai.cn/v1"
-$env:RERANKER_MODEL="qwen3-reranker-8b"
-$env:RERANKER_API_KEY="your-reranker-api-key"
-```
-
-可选变量：
-
-```powershell
-$env:MCP_SEARCH_INDEX_DIR="D:\\your_repo\\.mcp-index"
-$env:MCP_SEARCH_MAX_FILE_BYTES="300000"
-$env:MCP_SEARCH_AUTO_REINDEX="true"
-$env:MCP_SEARCH_AUTO_REINDEX_INTERVAL_SECONDS="5"
-$env:MCP_SEARCH_RERANKER_CANDIDATE_MULTIPLIER="6"
-$env:MCP_SEARCH_RERANKER_MAX_CANDIDATES="80"
-$env:MCP_SEARCH_RERANKER_CACHE_ENABLED="true"
-$env:MCP_SEARCH_RERANKER_CACHE_MAX_ENTRIES="5000"
-$env:MCP_SEARCH_CONTEXT_PACK_MAX_CHARS="20000"
-$env:RERANKER_TIMEOUT_SECONDS="30"
-$env:EMBEDDING_TIMEOUT_SECONDS="10"
-$env:MCP_SEARCH_CODE_CHUNK_LINES="120"
-$env:MCP_SEARCH_KB_CHUNK_CHARS="1600"
-```
-
-> **embedding 批处理**：reindex 时会将文本块按每批 200 个（可通过 `EMBED_BATCH_SIZE` 环境变量调整）发给 embedding 服务，避免单次请求过大导致超时。
-
-> **日志文件**：每个项目使用独立的日志文件 `local-mcp-search-<项目slug>.log`，避免多项目同时运行时日志文件争用。
-
-如果已经有 `LanceDB` 旧表或索引目录，`reindex` 会覆盖重建 `chunks` 表。
-
-## 2. 安装
+## 安装
 
 ```powershell
 python -m venv .venv
@@ -76,32 +35,95 @@ python -m venv .venv
 pip install -e .
 ```
 
-## 3. 本地调试
+## 本地模型部署
 
-先重建索引：
+当前默认走本地 `llama-server`，由 [launcher.py](/D:/trae_prj/mcp_sd/src/local_mcp_search/launcher.py:21) 自动拉起两个服务：
 
-```powershell
-python -m local_mcp_search.cli reindex
+- embedding: `bge-base-zh`
+- reranker: `bge-reranker-v2-m3`
+
+默认配置：
+
+```text
+llama-server: C:\Users\yyyx\.local\bin\llama-server.exe
+embedding gguf: D:\models\mradermacher\bge-base-zh-GGUF\bge-base-zh.f16.gguf
+reranker gguf: D:\models\gpustack\bge-reranker-v2-m3-GGUF\bge-reranker-v2-m3-Q8_0.gguf
+embedding port: 8887
+reranker port: 8888
 ```
 
-显式全量重建：
+`cpx` / `python -m local_mcp_search.launcher` 会先探测端口：
+
+- 如果端口上已有健康服务，直接复用
+- 如果端口被占用但接口不健康，直接报错，不会擅自杀进程
+- 如果服务未启动，会自动启动本地 `llama-server`
+
+日志默认写到：
+
+```text
+%TEMP%\llama-logs\
+```
+
+## 环境变量
+
+通常不需要手工设置 embedding / reranker 相关环境变量；`launcher` 会自动注入。
+
+如果你要手工运行 `python -m local_mcp_search`，至少需要：
+
+```powershell
+$env:MCP_SEARCH_WORKSPACE_ROOT="D:\your_repo"
+$env:EMBEDDING_BASE_URL="http://127.0.0.1:8887/v1"
+$env:EMBEDDING_MODEL="bge-base-zh"
+$env:EMBEDDING_API_KEY=""
+$env:MCP_SEARCH_RERANKER_ENABLED="true"
+$env:RERANKER_BASE_URL="http://127.0.0.1:8888"
+$env:RERANKER_MODEL="bge-reranker-v2-m3"
+$env:RERANKER_API_KEY=""
+```
+
+常用可选变量：
+
+```powershell
+$env:MCP_SEARCH_INDEX_DIR="D:\your_repo\.mcp-index"
+$env:MCP_SEARCH_MAX_FILE_BYTES="300000"
+$env:MCP_SEARCH_AUTO_REINDEX="false"
+$env:MCP_SEARCH_AUTO_REINDEX_INTERVAL_SECONDS="5"
+$env:MCP_SEARCH_RERANKER_CANDIDATE_MULTIPLIER="6"
+$env:MCP_SEARCH_RERANKER_MAX_CANDIDATES="80"
+$env:MCP_SEARCH_RERANKER_CACHE_ENABLED="true"
+$env:MCP_SEARCH_RERANKER_CACHE_MAX_ENTRIES="5000"
+$env:MCP_SEARCH_CONTEXT_PACK_MAX_CHARS="20000"
+$env:EMBEDDING_TIMEOUT_SECONDS="10"
+$env:RERANKER_TIMEOUT_SECONDS="30"
+$env:MCP_SEARCH_CODE_CHUNK_LINES="120"
+$env:MCP_SEARCH_KB_CHUNK_CHARS="1600"
+```
+
+说明：
+
+- 默认 `workspace root` 为当前目录；若当前目录在 git 仓库内，会自动提升到 git 根目录
+- 默认索引目录为 `<workspace>\.mcp-index`
+- `reindex` 时 embedding 采用批量请求，避免单次请求过大
+
+## CLI
+
+刷新索引：
+
+```powershell
+python -m local_mcp_search.cli reindex --mode auto
+```
+
+强制全量重建：
 
 ```powershell
 python -m local_mcp_search.cli reindex --mode full
 ```
 
-只处理变更文件：
+只做增量：
 
 ```powershell
 python -m local_mcp_search.cli reindex --mode incremental
 ```
-
-说明：
-
-- `auto` 为默认值
-- 在 Git 仓库里，候选文件来自 `git ls-files --cached --others --exclude-standard`，因此会遵守 `.gitignore`
-- `auto` 会结合 `last_indexed_commit` 和当前文件 manifest 判断受影响路径；已索引过的未提交文件不会反复触发 stale
-- 在非 Git 目录里，`auto` 会退化为基于文件 `size/sha256` 的 manifest 对比
 
 查看状态：
 
@@ -109,139 +131,58 @@ python -m local_mcp_search.cli reindex --mode incremental
 python -m local_mcp_search.cli status
 ```
 
-快速测试上下文打包：
+快速生成上下文包：
 
 ```powershell
 python -m local_mcp_search.cli context-pack "登录鉴权相关实现" --max-results 6 --max-chars 12000
 ```
 
-直接启动 stdio server：
+## 直接启动 MCP server
+
+如果你已经自己准备好了环境变量，可以直接启动：
 
 ```powershell
 python -m local_mcp_search
 ```
 
-或者直接读取你的本地模型 JSON 配置启动：
+更常用的是通过 launcher 启动：
 
 ```powershell
-.\run-local-mcp-search.ps1 -WorkspaceRoot D:\your_repo
-```
-
-默认会读取：
-
-- embedding 配置：`C:\Users\yyyx\Documents\models-setting\my-embd-bge-zh.json`
-- reranker 配置：`C:\Users\yyyx\Documents\models-setting\qwen3-reranker_lingya.json`
-
-如果暂时不想使用 reranker：
-
-```powershell
-.\run-local-mcp-search.ps1 -WorkspaceRoot D:\your_repo -DisableReranker
-```
-
-启用后台自动增量更新：
-
-```powershell
-.\run-local-mcp-search.ps1 -WorkspaceRoot D:\your_repo -AutoReindex -AutoReindexIntervalSeconds 5
-```
-
-也可以用 MCP Inspector：
-
-```powershell
-mcp dev src/local_mcp_search/server.py
-```
-
-推荐使用顺序：
-
-- 先用 `repo_overview` 快速看项目结构、入口文件和文档入口
-- 查具体函数、类、接口、类型定义时优先用 `symbol_search`
-- 查精确文本出现位置时用 `code_exact_search`
-- 查相似实现或相关逻辑时用 `code_semantic_search`
-- 需要直接拿到可阅读上下文时用 `code_context_pack`
-- 打开大文件前先用 `file_outline`
-- 围绕某个函数、类、类型、常量改代码时用 `symbol_context`
-- 查设计方案、计划、ADR、说明文档时用 `kb_search`
-- 回答项目文档问题时用 `doc_answer_context`
-- 接手本地改动或 review 前用 `change_context`
-- 判断依赖、框架、构建方式时用 `dependency_overview`
-- 搜到候选后，用 `open_spans` 拉精确上下文，不要直接展开整文件
-
-## 4. 接入 Codex
-
-示意：
-
-```powershell
-codex mcp add local-search -- powershell -File D:\trae_prj\mcp_sd\run-local-mcp-search.ps1 -WorkspaceRoot D:\your_repo
-```
-
-这个启动脚本会自动读取本地 embedding JSON 和 reranker JSON 配置并注入环境变量。
-
-### Codex 会话恢复快捷脚本
-
-如果你希望退出 Codex 后，自动生成一个“恢复当前会话”的快捷脚本，使用：
-
-```powershell
-codexr
+python -m local_mcp_search.launcher
 ```
 
 它会：
 
-1. 启动 `codex`
-2. 等你正常退出
-3. 从 `~/.codex/sessions` 找到当前项目刚结束的 session
-4. 在当前项目目录写出 `resume-codex-last.ps1`
+1. 确保本地 embedding / reranker 服务可用
+2. 注入当前 workspace 的环境变量
+3. 执行 `reindex`
+4. 更新 `local-search` MCP 配置
+5. 默认启动 `Codex`，并恢复最近会话
 
-之后你可以直接执行：
+## cpx 统一入口
 
-```powershell
-.\resume-codex-last.ps1
-```
-
-它本质上等价于：
+[cpx.ps1](/D:/trae_prj/mcp_sd/cpx.ps1:1) 是 PowerShell 包装入口，默认行为等价于：
 
 ```powershell
-codex resume <session_id>
+python -m local_mcp_search.launcher --client codex
 ```
 
-指定项目目录：
+也就是说，直接执行：
 
 ```powershell
-codexr -ProjectRoot D:\trae_prj\myagent
+cpx
 ```
 
-指定恢复脚本输出路径：
+会自动：
 
-```powershell
-codexr -ProjectRoot D:\trae_prj\myagent -ResumeScriptPath D:\shortcuts\resume-myagent.ps1
-```
+1. 识别目标 workspace
+2. 拉起或复用本地 llama-server
+3. 刷新索引
+4. 注册 `local-search`
+5. 启动 `Codex`
+6. 恢复该 workspace 最近会话；如果没有历史则新开
 
-如果你更想生成基于“最近一次会话”的恢复脚本，而不是固定某个 `session_id`，可以使用：
-
-```powershell
-codexr -UseLastResume
-```
-
-说明：
-
-- 这是外层包装器方案，不是改动 Codex 内部 `/exit` 行为。
-- 当前 Codex CLI 没有公开的 `/exit` 钩子，所以要实现“退出后自动生成恢复脚本”，需要通过这种方式包一层启动脚本。
-
-### 任意目录下的便捷方式（推荐）
-
-推荐把仓库里的 [cpx.ps1](D:/trae_prj/mcp_sd/cpx.ps1) 配成 PowerShell 别名 `cpx`。  
-`cpx` 是统一入口，负责四件事：
-
-1. 识别当前 workspace root
-2. 刷新本地 LanceDB 索引
-3. 更新 `local-search` MCP 配置
-4. 按当前项目恢复最近的 `Codex` 或 `Claude Code` 会话
-
-如果你希望在任意目录里直接使用 `cpx` / `local-search` / `codexr`，可以把它们写进 PowerShell profile：
-
-```powershell
-notepad $PROFILE
-```
-
-推荐至少保证 profile 里存在：
+如果你希望在任意目录直接用 `cpx`，可以在 PowerShell profile 里放一个薄包装：
 
 ```powershell
 function cpx {
@@ -249,122 +190,129 @@ function cpx {
         [Parameter(ValueFromRemainingArguments = $true)]
         [string[]]$Args
     )
+
     & "D:\trae_prj\mcp_sd\cpx.ps1" @Args
 }
 ```
 
-如果你已经按本 README 的步骤配置过 profile，新开一个 PowerShell 窗口后即可直接使用，不需要手工再次加载。
+## cpx 常用示例
 
-默认行为是 `Codex`：
+当前目录启动并恢复最近 Codex 会话：
 
 ```powershell
 cpx
 ```
 
+显式启动 Codex：
+
+```powershell
+cpx -Codex
+```
+
+显式启动 Claude Code：
+
+```powershell
+cpx -Claude
+```
+
 指定项目目录：
 
 ```powershell
-cpx -ProjectRoot D:\trae_prj\myagent
+cpx -ProjectRoot D:\trae_prj\myagent -Codex
 ```
 
-显式启动 `Codex`：
+恢复最近 Claude 会话：
 
 ```powershell
-cpx -Codex
+cpx -ProjectRoot D:\trae_prj\myagent -Claude
 ```
 
-显式启动 `Claude Code`：
+忽略历史直接新开：
 
 ```powershell
-cpx -Claude
-```
-
-当前终端已经在项目目录时，最常用的是：
-
-```powershell
-cpx -Codex
-cpx -Claude
-```
-
-这两条命令都会：
-
-1. 自动提升到 git 根目录；非 git 目录则使用当前目录
-2. 执行 `reindex`
-3. 更新对应客户端的 `local-search`
-4. 查找该项目最近 session 并恢复
-
-如果没有历史 session，就自动新开会话。
-
-### `cpx` 常用参数
-
-```powershell
-# 强制全量重建后恢复最近 Codex 会话
-cpx -Codex -ReindexMode full
-
-# 恢复最近 Claude 会话
-cpx -Claude
-
-# 忽略历史，直接新开
 cpx -Codex -Fresh
 cpx -Claude -Fresh
+```
 
-# 手工选择历史 session
+手工选择历史会话：
+
+```powershell
 cpx -Codex -Pick
 cpx -Claude -Pick
+```
 
-# 恢复时 fork 新会话
+从最近会话 fork：
+
+```powershell
 cpx -Codex -Fork
 cpx -Claude -Fork
+```
 
-# 指定项目目录
-cpx -ProjectRoot D:\trae_prj\myagent -Codex
+强制全量 reindex：
 
-# 指定不同 reranker 配置
-cpx -ProjectRoot D:\trae_prj\myagent -RerankerConfigPath C:\path\to\your-reranker.json -Codex
+```powershell
+cpx -Codex -ReindexMode full
+```
 
-# 临时关闭 reranker
-cpx -ProjectRoot D:\trae_prj\myagent -DisableReranker -Claude
+只更新 MCP，不启动客户端：
 
-# 额外把 Claude Code 的 MCP 也注册好
+```powershell
+python -m local_mcp_search.launcher --client none
+```
+
+关闭 reranker：
+
+```powershell
+cpx -ProjectRoot D:\trae_prj\myagent -Claude -DisableReranker
+```
+
+同时注册 Claude MCP：
+
+```powershell
 cpx -ProjectRoot D:\trae_prj\myagent -Codex -RegisterClaude
+```
 
-# 为 Claude Code 生成项目级 .mcp.json
+写出 Claude 项目级 `.mcp.json`：
+
+```powershell
 cpx -ProjectRoot D:\trae_prj\myagent -WriteClaudeProjectConfig
 ```
 
 说明：
 
-- `cpx` 默认会注册 `Codex` 的 `local-search`
-- `cpx -Claude` 会同时注册 `Claude Code` 的 `local-search`
-- `cpx -Codex -RegisterClaude` 适合你主要用 Codex，但希望 Claude 也顺手可用
+- `cpx` 空参默认启动 `Codex`
+- `-Claude` 会启动 Claude Code，并恢复该项目最近 Claude 会话
+- `-Fork` 对 Codex 使用 `codex fork <session_id>`，对 Claude 使用 `claude --resume <session_id> --fork-session`
 
-### 底层脚本
+## MCP 注册
 
-如果你只想做“刷新索引 + 更新 MCP 配置”，不想立刻启动客户端，可以直接调用底层脚本：
+`launcher` 会自动更新 MCP 配置。
 
-```powershell
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent
-```
-
-它默认会：
-
-1. 刷新索引
-2. 更新 Codex 的 `local-search`
-
-如果需要也一起更新 Claude：
+Codex 当前注册方式等价于：
 
 ```powershell
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -RegisterClaude
+codex mcp add local-search -- C:\Program Files\Python311\python.exe D:\your_repo\.mcp-index\_mcp_server_wrapper.py
 ```
 
-如果你要直接从底层脚本启动客户端，也支持：
+Claude Code 当前注册方式等价于：
 
 ```powershell
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -Codex
-D:\trae_prj\mcp_sd\use-local-mcp-search.ps1 -ProjectRoot D:\trae_prj\myagent -Claude
+claude mcp add local-search C:\Program Files\Python311\python.exe D:\your_repo\.mcp-index\_mcp_server_wrapper.py
 ```
 
-### 验证 MCP 是否接上
+这个 wrapper 会写到：
+
+```text
+<workspace>\.mcp-index\_mcp_server_wrapper.py
+```
+
+它会在子进程里补齐：
+
+- `PYTHONPATH/src`
+- `MCP_SEARCH_WORKSPACE_ROOT`
+- embedding / reranker 端点
+
+## 验证 MCP
 
 Codex：
 
@@ -373,14 +321,29 @@ codex mcp list
 codex mcp get local-search
 ```
 
-Claude Code：
+Claude：
 
 ```powershell
 claude mcp list
 claude mcp get local-search
 ```
 
-### 在 Codex / Claude 里如何用
+也可以直接做健康检查：
+
+```powershell
+python -m local_mcp_search.cli status
+```
+
+正常情况下，`index_status` 应该能看到：
+
+```text
+reranker_enabled: true
+reranker_model: bge-reranker-v2-m3
+embedding_model: bge-base-zh
+health.status: healthy
+```
+
+## 在 Codex / Claude 里如何用
 
 进入客户端后，可以直接这样提示：
 
@@ -393,77 +356,35 @@ claude mcp get local-search
 ```
 
 ```text
-用 code_semantic_search 找登录鉴权相关实现，再用 open_spans 打开关键片段。
+用 code_exact_search 找某个具体函数名，再用 open_spans 打开关键片段。
 ```
 
 ```text
-用 kb_search 查项目文档里的部署说明，再用 open_spans 打开最相关片段。
+用 code_context_pack 看“登录鉴权相关实现”，再基于返回片段继续修改。
 ```
-
-正常情况下，`index_status` 应该能看到：
 
 ```text
-reranker_enabled: true
-reranker_model: qwen3-reranker-8b
+用 kb_search 查部署说明，再用 open_spans 打开最相关片段。
 ```
 
-## 6. 工具优先级（LLM 视角）
+## 工具使用顺序
 
-从被调用的 LLM 视角来看，工具的价值取决于两点：**节省 token**（少读无关代码）和**减少往返轮次**（合并多次调用）。
+推荐顺序：
 
-### Tier 1 — 核心，每次会话必用
+- 先用 `repo_overview` 看项目结构
+- 查具体符号优先用 `symbol_search`
+- 查具体字符串优先用 `code_exact_search`
+- 找相似实现或模式再用 `code_semantic_search`
+- 做实现或调试时，优先用 `code_context_pack`
+- 打开文件前先用 `file_outline`
+- 精读具体片段时用 `open_spans`
+- 修改某个函数/类前先用 `symbol_context`
+- 看未提交变更时用 `change_context`
+- 看依赖和构建方式时用 `dependency_overview`
+- 检查索引和后端健康时用 `index_status`
 
-| 工具 | 价值 |
-|------|------|
-| **`code_exact_search`** | 查具体符号、字符串的最快路径。比 Grep/Bash grep 更准、更省 token，是使用频率最高的工具 |
-| **`file_outline`** | 打开文件前先看结构（函数/类/接口列表），然后精准定位要读的行范围。没有它 LLM 会直接 Read 整文件，每 500 行浪费约 3000 token |
-| **`open_spans`** | 按行号范围精确读取，而非展开整个文件。与 `file_outline` 配合是省 token 的黄金组合 |
+## 备注
 
-> 黄金组合：找到文件 → `file_outline` 看结构 → `open_spans` 读关键行。一次全文件 Read 动辄 3000 token，精准拉取只要 500。
-
-### Tier 2 — 高频使用，一轮顶 3-5 轮
-
-| 工具 | 价值 |
-|------|------|
-| **`code_context_pack`** | 实现功能前的 best first tool。一次调用完成语义召回、重排、去重、相邻合并和字符预算裁剪，替代 `code_semantic_search → 手工筛选 → open_spans × N` 的多轮操作 |
-| **`symbol_context`** | 改某个函数/类时，一次拿到定义、所有引用位置、关键片段，省掉 3-4 次单独查找和读取 |
-
-### Tier 3 — 有场景时很值
-
-| 工具 | 价值 |
-|------|------|
-| **`repo_overview`** | 任务开始时花 1 秒看项目结构，避免在错误方向浪费多轮探索 |
-| **`change_context`** | resume 中断工作时，直接拿到未提交变更的上下文，不用手动 `git diff` + 逐个读文件 |
-| **`dependency_overview`** | 快速判断技术栈和构建系统，确定用什么命令 |
-
-### Tier 4 — 偶尔用到
-
-- **`symbol_search`**：有函数名但不知定义在哪时有用，但多数场景被 `code_exact_search` 覆盖
-- **`code_semantic_search`**：无具体标识符的模糊查询，使用场景较少
-- **`kb_search` / `doc_answer_context`**：看项目文档和设计决策，仅在文档完善的仓库里有价值
-- **`index_status` / `reindex`**：排障用，正常流程不需要
-
-> **降本增效最关键的三个**：`file_outline` + `open_spans`（省 token）、`code_context_pack`（省轮次）。`code_exact_search` 是使用频率基石。
-
-- `code_context_pack`：自动完成语义召回、rerank、去重、合并相邻片段和字符预算裁剪，适合实现功能或调 bug 前获取紧凑上下文。
-- `file_outline`：返回单文件里的函数、类、接口、类型、常量和路由式声明，适合打开大文件前先定位。
-- `symbol_context`：围绕 symbol 聚合定义、引用和代码片段，适合改函数、类、类型或配置项。
-- `doc_answer_context`：从 README、docs、ADR、工作记录等知识库文件中返回紧凑回答上下文。
-- `change_context`：汇总当前 Git/manifest 变更文件并提供紧凑上下文，适合 review 或继续中断工作。
-- `dependency_overview`：读取 `package.json`、`pyproject.toml`、`go.mod`、`Dockerfile` 等依赖/构建文件，快速判断项目技术栈。
-- `index_status`：现在会提示 `index_may_be_stale`、`changed_path_count` 和建议的 `reindex auto`。
-- 语义搜索结果同时保留 `vector_score` 和 `rerank_score`，便于判断粗召回和精排效果。
-- reranker 支持内存缓存，减少重复 query/chunk 的公网 rerank 调用。
-- Python / JS / TS 代码优先按轻量 symbol 边界切块，其他语言继续使用行窗口切块。
-
-## 7. 当前限制
-
-- 代码切块先采用轻量规则，不做完整 AST 级别切块
-- 向量索引存在 `.mcp-index\lancedb\`
-- 元数据状态存在 `.mcp-index\metadata.json`
-- 已支持 `full / incremental / auto` 三种重建模式
-- 已支持可选的后台自动增量更新，当前采用轮询方式
-- reranker 接口不可用时会自动回退到 LanceDB 原始向量排序
-- 大仓库下首次 reindex 仍需数分钟，后续增量 reindex 通常 <1 分钟
-- 超过 50% 文件变更时自动回退到全量重建，避免逐条删除带来的性能问题
-
+- 当前实现已经从“远端 OpenAI 兼容 embedding/reranker JSON 配置启动”切换为“本地 llama-server 模型部署 + Python launcher 启动”
+- 旧的 `run-local-mcp-search.ps1` / `use-local-mcp-search.ps1` 已不再是主入口
+- 当前推荐入口是 `cpx.ps1` 或 `python -m local_mcp_search.launcher`

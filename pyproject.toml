@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 local-mcp-search = "local_mcp_search.server:main"
+cpx = "local_mcp_search.launcher:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

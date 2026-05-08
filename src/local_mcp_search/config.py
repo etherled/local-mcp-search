@@ -100,7 +100,7 @@ class Settings:
             workspace_root=workspace_root,
             index_dir=index_dir,
             embedding_base_url=os.environ.get(
-                "EMBEDDING_BASE_URL", "http://127.0.0.1:1234/V1"
+                "EMBEDDING_BASE_URL", "http://127.0.0.1:8887/v1"
             ),
             embedding_model=os.environ.get(
                 "EMBEDDING_MODEL", "text-embedding-bge-base-zh"
