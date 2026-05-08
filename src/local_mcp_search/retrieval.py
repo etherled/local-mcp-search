@@ -620,7 +620,22 @@ class RetrievalService:
         return pack
 
     def change_context(self, *, max_results: int = 30, max_chars: int | None = None) -> dict:
-        changed_paths = self.index_store.detect_changed_paths_public()
+        git_status_entries = get_git_status_entries(self.settings.workspace_root) or []
+        git_status_by_path = {
+            entry["path"]: entry
+            for entry in git_status_entries
+        }
+        status_snapshot = self.index_store.status(quick=True)
+        committed_since_index = get_git_changed_paths(
+            self.settings.workspace_root,
+            status_snapshot.get("last_indexed_commit"),
+        ) or set()
+        changed_paths: set[str] | None
+        if is_git_repo(self.settings.workspace_root):
+            changed_paths = set(git_status_by_path).union(committed_since_index)
+        else:
+            changed_paths = self.index_store.detect_changed_paths_public()
+
         if changed_paths is None:
             return {
                 "changed_paths": None,
@@ -628,17 +643,7 @@ class RetrievalService:
                 "message": "Change detection unavailable; run reindex auto or inspect git status.",
             }
 
-        git_status_entries = get_git_status_entries(self.settings.workspace_root) or []
-        git_status_by_path = {
-            entry["path"]: entry
-            for entry in git_status_entries
-        }
         git_numstat = get_git_numstat(self.settings.workspace_root) or {}
-        status_snapshot = self.index_store.status(quick=True)
-        committed_since_index = get_git_changed_paths(
-            self.settings.workspace_root,
-            status_snapshot.get("last_indexed_commit"),
-        ) or set()
 
         items = []
         for rel_path in sorted(changed_paths):
