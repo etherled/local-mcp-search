@@ -11,7 +11,7 @@ from .config import Settings
 from .context_pack import build_context_pack
 from .embedding_client import EmbeddingClient
 from .exact_search import run_exact_search
-from .index_store import IndexStore
+from .index_store import IndexStore, is_git_repo
 from .models import SearchResult
 from .outline import build_file_outline
 from .reranker_client import RerankerClient
@@ -213,6 +213,48 @@ class RetrievalService:
         }
 
         return status
+
+    def doctor(self) -> dict:
+        status = self.index_status()
+        repo_root = self.settings.workspace_root
+        embedding_model = self.settings.embedding_model
+        reranker_model = self.settings.reranker_model if self.reranker_client.enabled else None
+
+        checks = {
+            "workspace_exists": repo_root.exists(),
+            "workspace_writable": repo_root.exists() and repo_root.is_dir(),
+            "git_available": is_git_repo(repo_root),
+            "index_dir_exists": self.settings.index_dir.exists(),
+            "index_metadata_exists": self.index_store.metadata_path.exists(),
+            "reranker_enabled": self.reranker_client.enabled,
+        }
+
+        summary = {
+            "workspace_root": str(repo_root),
+            "index_dir": str(self.settings.index_dir),
+            "embedding_base_url": self.settings.embedding_base_url,
+            "embedding_model": embedding_model,
+            "reranker_base_url": self.settings.reranker_base_url if self.reranker_client.enabled else None,
+            "reranker_model": reranker_model,
+            "health_status": status.get("health", {}).get("status"),
+            "checks": checks,
+            "issues": list(status.get("health", {}).get("issues", [])),
+            "suggested_actions": list(status.get("health", {}).get("suggested_actions", [])),
+            "status": status,
+        }
+
+        if not checks["workspace_exists"]:
+            summary["issues"].append("Workspace root does not exist.")
+        if not checks["workspace_writable"]:
+            summary["issues"].append("Workspace root is not a writable directory.")
+        if not checks["index_dir_exists"]:
+            summary["suggested_actions"].append("Run reindex auto to create the index directory.")
+        if not self.reranker_client.enabled:
+            summary["suggested_actions"].append("Reranker is disabled; semantic results will skip reranking.")
+        if not status.get("index_exists"):
+            summary["suggested_actions"].append("Run reindex auto after backend health is green.")
+
+        return summary
 
     def reindex(self, mode: str = "auto") -> dict:
         with self._reindex_lock:

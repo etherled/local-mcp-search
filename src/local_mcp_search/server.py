@@ -80,6 +80,18 @@ def index_status() -> dict:
 
 @mcp.tool(
     description=(
+        "Run a startup diagnosis for local-search. "
+        "Use this when you need to check workspace, git, index directory, embedding/reranker health, "
+        "and recommended next actions before relying on semantic search."
+    )
+)
+def doctor() -> dict:
+    """Return a compact diagnosis summary for local-search readiness."""
+    return service.doctor()
+
+
+@mcp.tool(
+    description=(
         "Rebuild the local semantic index for code and knowledge files. "
         "Use mode=auto by default. Use mode=full when the index is missing, corrupt, or the chunking/embedding setup changed. "
         "Use mode=incremental when you know only a few files changed and want to refresh affected paths."

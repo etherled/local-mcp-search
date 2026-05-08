@@ -12,6 +12,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("status", help="Show index status")
+    subparsers.add_parser("doctor", help="Run a startup and health diagnosis")
     reindex_parser = subparsers.add_parser("reindex", help="Rebuild semantic index")
     reindex_parser.add_argument(
         "--mode",
@@ -29,6 +30,9 @@ def main() -> None:
 
     if args.command == "status":
         print(json.dumps(service.index_status(), ensure_ascii=False, indent=2))
+        return
+    if args.command == "doctor":
+        print(json.dumps(service.doctor(), ensure_ascii=False, indent=2))
         return
     if args.command == "reindex":
         print(json.dumps(service.reindex(mode=args.mode), ensure_ascii=False, indent=2))

@@ -150,6 +150,12 @@ codex mcp get local-search
 claude mcp get local-search
 ```
 
+7. 运行诊断
+
+```powershell
+python -m local_mcp_search.cli doctor
+```
+
 ## 环境变量
 
 通常不需要手工设置 embedding / reranker 相关环境变量；`launcher` 会自动注入。
@@ -469,6 +475,27 @@ health.status: healthy
 - 看未提交变更时用 `change_context`
 - 看依赖和构建方式时用 `dependency_overview`
 - 检查索引和后端健康时用 `index_status`
+
+## 适合场景
+
+- 中大型仓库
+- 需要频繁恢复工作上下文
+- 需要同时查代码和知识库
+- 依赖 Codex / Claude Code 的日常开发流
+
+## 不适合场景
+
+- 很小的仓库
+- 几乎不需要语义搜索
+- 不愿维护本地模型
+- 追求跨平台零配置
+
+## 为什么不用 grep / Read
+
+- `code_exact_search` 比手工 `rg` 更贴近 agent 的结构化调用
+- `file_outline` 先看结构，能避免盲读整文件
+- `open_spans` 只取必要片段，减少无效上下文
+- `code_context_pack` 能把搜索、读片段和压缩合成一次
 
 ## 备注
 
