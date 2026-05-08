@@ -264,7 +264,8 @@ def symbol_context(
     description=(
         "Summarize changed files and provide compact context for current git/manifest changes. "
         "MUST use this when resuming interrupted work, before code review, or when you need to understand what was just edited. "
-        "After seeing changed files, follow up with open_spans to read the actual diffs in key files."
+        "It returns grouped items, change scope (worktree vs committed_since_index), change type, risk hints, and git numstat when available. "
+        "Prioritize high-risk, high_attention, or worktree items first, then follow up with open_spans on the most important files."
     )
 )
 def change_context(max_results: int = 30, max_chars: int | None = None) -> dict:
@@ -275,7 +276,8 @@ def change_context(max_results: int = 30, max_chars: int | None = None) -> dict:
 @mcp.tool(
     description=(
         "Summarize dependency and build configuration files such as package.json, pyproject.toml, go.mod, Dockerfile, and compose files. "
-        "MUST use this BEFORE running any build, install, or test commands — it tells you the package manager, framework, and how to invoke tools correctly."
+        "MUST use this BEFORE running any build, install, or test commands — it tells you the package manager, framework, and how to invoke tools correctly. "
+        "Prefer this or repo://dependency-summary for setup, runtime, CI, and package-manager questions before searching the codebase broadly."
     )
 )
 def dependency_overview(max_files: int = 12) -> dict:
@@ -287,7 +289,8 @@ def dependency_overview(max_files: int = 12) -> dict:
     description=(
         "Return a lightweight overview of the current repository, including top-level directories, common file types, likely documentation entrypoints, "
         "and likely code entrypoints. "
-        "Use this at the start of a task when you need a cheap project map before deeper searches."
+        "Use this at the start of a task when you need a cheap project map before deeper searches. "
+        "Prefer this or repo://overview for first-pass orientation, entrypoint discovery, and deciding where targeted reads should begin."
     )
 )
 def repo_overview(max_entries: int = 12) -> dict:
@@ -301,7 +304,7 @@ def repo_overview(max_entries: int = 12) -> dict:
     title="Repository Overview",
     description=(
         "Stable resource for repository structure, entrypoints, and file-type summary. "
-        "Useful when a client prefers resources over one-off tool calls."
+        "Useful when a client prefers resources over one-off tool calls, especially for first-pass orientation or repeated reads."
     ),
     mime_type="application/json",
 )
@@ -316,7 +319,8 @@ def repo_overview_resource() -> dict:
     title="Dependency Summary",
     description=(
         "Stable resource for dependency and build configuration context such as pyproject.toml, "
-        "package.json, go.mod, Dockerfile, or compose files."
+        "package.json, go.mod, Dockerfile, or compose files. "
+        "Prefer this for setup, runtime, package-manager, or CI questions when the client supports resources well."
     ),
     mime_type="application/json",
 )
@@ -331,7 +335,8 @@ def repo_dependency_summary_resource() -> dict:
     title="Repository Changes",
     description=(
         "Stable resource for current changed files and compact context. "
-        "Useful for resume, review, or handoff workflows."
+        "Useful for resume, review, or handoff workflows. "
+        "Read this before opening code when you need a stable snapshot of high-risk or recent change areas."
     ),
     mime_type="application/json",
 )
