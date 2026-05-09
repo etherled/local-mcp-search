@@ -2,21 +2,79 @@
 
 English README: [README.md](/D:/trae_prj/mcp_sd/README.md)
 
-本项目提供一个本地 `STDIO MCP Server`，给 `Codex` / `Claude Code` 提供代码库与知识库检索能力。
+本项目提供一个本地 `STDIO MCP Server`，面向 `Codex`、`Claude Code` 以及其他支持 MCP 的 coding agent。
+核心思路很简单：用少量本地 CPU/GPU 资源做检索、rerank 和上下文压缩，让远端模型少做盲扫，把预算更多花在推理和改代码上。
 
-当前公开版本建议定位为：
+## 为什么值得用
+
+如果没有本地检索层，coding agent 很容易出现这几类浪费：
+
+- 搜得太宽
+- 读太多文件
+- 把昂贵上下文浪费在低价值文本上
+- 多花几轮才补齐正确实现上下文
+
+`local-search` 把这些工作下沉到本地基础设施：
+
+- 用本地 `ripgrep` 做精确检索
+- 用本地 embedding 做语义召回
+- 用本地 reranker 做排序
+- 用更紧凑的 span/context 打包方式喂给 agent
+- 通过 MCP tools 和 resources 直接接入 agent 工作流
+
+目标不是“多几个工具”，而是更好的 agent 经济性：
+
+- 不牺牲任务成功率
+- 降低无效 token 消耗
+- 减少不必要轮次
+- 更快拿到正确上下文
+
+## 已测效果
+
+当前 benchmark 已经说明这套思路有实际价值，但不同 agent 的收益结构并不完全相同。
+
+| Agent | 样本 | 成功率 | 当前主要收益 |
+| --- | --- | --- | --- |
+| `Claude` | `4 tasks`，`baseline vs local-search` | `4/4 -> 4/4` | cost `-31.92%`，turns `-33.33%`，latency `-15.59%` |
+| `Codex` | `4 tasks`，`baseline vs local-search` | `4/4 -> 4/4` | token `-21.94%`，latency `-3.76%` |
+
+当前更准确的解读是：
+
+- 对 `Claude`，最强信号是 `成功率 + 计费 + 耗时 + 轮次`
+- 对 `Codex`，最强信号是 `成功率 + 耗时 + token`
+- 收益指标会受 agent 和 provider 路由影响，不宜强行统一成单一口径
+
+因此，当前公开表述比较稳妥的说法应是：
+
+- `local-search` 已经在受控 benchmark 中体现出可测量、可落地的效率收益
+- 当前典型收益大致在 `15%~30%` 区间，但具体提升哪一项指标，要看 agent 本身
+
+## 原理
+
+整体设计并不复杂：
+
+1. 用少量本地资源构建并查询本地索引
+2. 在 agent 真正读文件前，先召回并 rerank 候选文件或代码片段
+3. 只把最相关的上下文发给远端模型
+
+本质上，这是把重复的远端上下文浪费，换成一个更轻量的本地检索层。
+
+## 当前定位
 
 - `alpha / 0.1.x`
 - `Windows-first`
-- 面向 `Codex` / `Claude Code` 的本地检索型 MCP
+- 面向 `Codex`、`Claude Code` 和 MCP 风格的 coding workflow
+- 当前优先按本地 `llama-server` 部署优化
 
-当前优先支持：
+## 你能得到什么
 
-- `Windows 10/11 x64`
-- PowerShell 工作流
-- 本地 `llama-server` 部署
+- 足够快的本地精确检索，替代大范围盲扫
+- 在远端模型消耗上下文前，先做本地语义召回和 rerank
+- 更紧凑的文件/span 打包，减少“读了很多但没读到关键点”
+- 一个统一的 `cpx` 入口，负责启动、reindex、MCP 注册和会话恢复
+- 更贴近真实 coding-agent 工作流的 MCP tools 与 resources
 
-当前提供的 MCP tools：
+## 已包含的 MCP Tools
 
 - `code_exact_search`
 - `symbol_search`
@@ -33,27 +91,34 @@ English README: [README.md](/D:/trae_prj/mcp_sd/README.md)
 - `index_status`
 - `reindex`
 
-当前实现重点：
-
-- 精确检索基于本地 `ripgrep`
-- 语义检索基于本地 embedding
-- reranker 基于本地 llama-server 部署
-- 向量索引使用本地 `LanceDB`
-- `cpx` 统一负责启动本地模型、刷新索引、注册 MCP、恢复最近会话
-
 ## 当前状态
 
-截至 `2026-05-09`，当前仓库已经完成的主线调整包括：
+截至 `2026-05-09`：
 
-- embedding / reranker 已切到本地 `llama-server` 部署，由 `launcher` / `cpx` 统一拉起或复用
-- `cpx` 空参默认启动 `Codex`，并按 workspace 恢复最近会话；`cpx -Claude` 对应恢复最近 Claude 会话
-- `doctor` 可直接检查 `embedding`、`reranker`、MCP 注册目标与 workspace 是否匹配
+- embedding 和 reranking 已切到本地 `llama-server` 部署
+- `cpx` 空参默认启动 `Codex`，并按当前 workspace 恢复最近会话
+- `cpx -Claude` 会恢复当前 workspace 的最近 Claude 会话
+- `doctor` 可直接检查模型健康状态和 MCP 注册状态
 - `repo://overview`、`repo://dependency-summary`、`repo://changes` 已可作为稳定 resource 使用
-- `change_context` 在 Windows MCP 通道里已做稳定性收口，异常时会优先快速失败而不是长时间卡死
+- 仓库已内置 `baseline x local-search x Codex x Claude` 的自动 benchmark harness
 
-仓库已经补上自动 benchmark harness，可直接跑 `Codex x Claude x baseline x local-search` 的 `16-run` 矩阵；其中 `Claude + Xiaomi Mimo 2.5 Pro` 的首轮受控样本已经跑通，`Codex` 结果目前仍受跨区链路和 `429` 限流影响。
+当前最强的受控 benchmark 证据主要来自 `Claude + Xiaomi Mimo 2.5 Pro`，以及一组更早验证过兼容性的 `Codex` 路由。
 
-## 安装
+## 适合场景
+
+- 中大型仓库
+- 需要频繁恢复工作上下文
+- 需要同时查代码和知识库
+- 依赖 `Codex` / `Claude Code` 的日常开发流
+
+## 不适合场景
+
+- 很小的仓库
+- 几乎不需要语义搜索
+- 不愿维护本地模型
+- 追求跨平台零配置
+
+## 快速开始
 
 ```powershell
 python -m venv .venv
@@ -121,11 +186,7 @@ reranker port: 8888
 %TEMP%\llama-logs\
 ```
 
-## 快速验证
-
-建议公开用户按下面顺序做最小 smoke test：
-
-1. 准备模型路径
+先设置模型路径：
 
 ```powershell
 $env:LOCAL_SEARCH_LLAMA_SERVER="D:\path\to\llama-server.exe"
@@ -133,41 +194,21 @@ $env:LOCAL_SEARCH_EMBED_GGUF="D:\models\bge-base-zh.f16.gguf"
 $env:LOCAL_SEARCH_RERANK_GGUF="D:\models\bge-reranker-v2-m3-Q8_0.gguf"
 ```
 
-2. 刷新索引
+然后做最小 smoke test：
 
 ```powershell
 python -m local_mcp_search.cli reindex --mode auto
-```
-
-3. 查看状态
-
-```powershell
 python -m local_mcp_search.cli status
-```
-
-4. 启动并恢复最近 Codex 会话
-
-```powershell
-cpx
-```
-
-5. 启动并恢复最近 Claude 会话
-
-```powershell
-cpx -Claude
-```
-
-6. 检查 MCP 是否已注册
-
-```powershell
+python -m local_mcp_search.cli doctor
 codex mcp get local-search --json
 claude mcp get local-search
 ```
 
-7. 运行诊断
+统一入口：
 
 ```powershell
-python -m local_mcp_search.cli doctor
+cpx
+cpx -Claude
 ```
 
 ## 环境变量
@@ -652,20 +693,6 @@ python .\scripts\run_benchmark.py --pause-seconds 20 --retry-backoff-seconds 45
 - 第三方 `Codex` 转发链路在 `schema` / `response_format` 路径上可能不兼容；并非所有 OpenAI 兼容接口都能直接用于当前 `Codex CLI`
 - 如果 `Codex` 交互式对话正常，但 benchmark 的 `schema` 模式失败，不代表 benchmark 存在并发问题，更常见原因是供应商对 `exec` / `Responses API` / structured output 链路兼容不完整
 - `change_context` 在部分 Windows MCP 宿主里仍可能走快速 timeout 回退；稳定 resume / review 场景可优先用 `repo://changes`
-
-## 适合场景
-
-- 中大型仓库
-- 需要频繁恢复工作上下文
-- 需要同时查代码和知识库
-- 依赖 Codex / Claude Code 的日常开发流
-
-## 不适合场景
-
-- 很小的仓库
-- 几乎不需要语义搜索
-- 不愿维护本地模型
-- 追求跨平台零配置
 
 ## 为什么不用 grep / Read
 

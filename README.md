@@ -2,25 +2,79 @@
 
 Chinese README: [README.zh-CN.md](/D:/trae_prj/mcp_sd/README.zh-CN.md)
 
-`local-mcp-search` is a Windows-first local `STDIO MCP Server` for `Codex` and `Claude Code`.
-It provides codebase and knowledge-base retrieval, local reranking, and context compression so the remote model can spend more of its budget on reasoning and editing instead of blind scanning.
+`local-mcp-search` is a Windows-first local `STDIO MCP Server` for `Codex`, `Claude Code`, and similar MCP-capable coding agents.
+The core idea is simple: use a small amount of local CPU/GPU for retrieval, reranking, and context compression, so the remote model spends less budget on blind scanning and more budget on reasoning and editing.
 
-Current public positioning:
+## Why It Matters
+
+Without a local retrieval layer, coding agents often:
+
+- search too broadly
+- read too many files
+- waste expensive context on low-value text
+- take extra turns to recover the right implementation context
+
+`local-search` pushes that work down to local infrastructure:
+
+- exact search with local `ripgrep`
+- semantic retrieval with local embeddings
+- local reranking
+- compact span selection and context packing
+- MCP tools and resources that agents can call directly
+
+The goal is not "more tools". The goal is better agent economics:
+
+- preserve task success
+- reduce wasted token budget
+- reduce unnecessary turns
+- improve time-to-context
+
+## Measured Impact
+
+Current benchmark evidence already shows practical value, but the gain pattern is agent-specific.
+
+| Agent | Sample | Success Rate | Main Measured Gain |
+| --- | --- | --- | --- |
+| `Claude` | `4 tasks`, `baseline vs local-search` | `4/4 -> 4/4` | cost `-31.92%`, turns `-33.33%`, latency `-15.59%` |
+| `Codex` | `4 tasks`, `baseline vs local-search` | `4/4 -> 4/4` | token `-21.94%`, latency `-3.76%` |
+
+Interpretation:
+
+- for `Claude`, the strongest current value signal is `success rate + cost + latency + turn count`
+- for `Codex`, the strongest current value signal is `success rate + latency + token`
+- the exact gain depends on the agent and provider route; do not force one metric across every client
+
+So the public claim should be:
+
+- `local-search` already shows practical, measurable efficiency wins in controlled agent benchmarks
+- a typical gain range today is on the order of `15%~30%`, but the metric that moves most depends on the agent
+
+## How It Works
+
+The design is intentionally simple:
+
+1. use small local resources to build and query a local index
+2. retrieve and rerank candidate files or spans before the agent reads them
+3. send the remote model only the most relevant context
+
+That shifts cost away from repeated remote context waste and toward a lightweight local retrieval layer.
+
+## Current Positioning
 
 - `alpha / 0.1.x`
 - `Windows-first`
-- built for `Codex` and `Claude Code`
+- built for `Codex`, `Claude Code`, and MCP-oriented coding workflows
 - optimized for local `llama-server` deployment
 
-## Highlights
+## What You Get
 
-- exact code search backed by local `ripgrep`
-- semantic search backed by local embeddings
-- local reranker served through `llama-server`
-- local vector index powered by `LanceDB`
-- `cpx` launcher for model startup, reindex, MCP registration, and session resume
+- local exact search that is fast enough to replace broad blind file scanning
+- semantic retrieval and reranking before the agent spends remote context
+- compact file/span packaging so the model reads less but sees better context
+- a single `cpx` entrypoint for startup, reindex, MCP registration, and session resume
+- stable MCP resources and tools that fit real coding-agent workflows
 
-Current MCP tools:
+## Included MCP Tools
 
 - `code_exact_search`
 - `symbol_search`
@@ -37,26 +91,64 @@ Current MCP tools:
 - `index_status`
 - `reindex`
 
-## Status
+## Current Status
 
-As of `2026-05-09`, the current repository state includes:
+As of `2026-05-09`:
 
-- embedding and reranking moved to local `llama-server` deployment, started or reused by `launcher` / `cpx`
-- `cpx` with no arguments now starts `Codex` by default and resumes the latest workspace session
+- embedding and reranking are served locally through `llama-server`
+- `cpx` defaults to `Codex` and resumes the latest session for the current workspace
 - `cpx -Claude` resumes the latest Claude session for the current workspace
-- `doctor` can verify embedding, reranker, and whether MCP registration matches the current workspace
+- `doctor` verifies model health and MCP registration
 - `repo://overview`, `repo://dependency-summary`, and `repo://changes` are available as stable MCP resources
-- `change_context` has been hardened for Windows MCP hosts to fail fast instead of hanging for long periods
+- the repo includes an automated benchmark harness for `baseline x local-search x Codex x Claude`
 
-The repo also includes an automated benchmark harness for the `Codex x Claude x baseline x local-search` matrix.
-At the moment, the most reliable controlled benchmark conclusions come from `Claude + Xiaomi Mimo 2.5 Pro`, plus an earlier verified compatible `Codex` route.
+The current strongest controlled benchmark evidence comes from `Claude + Xiaomi Mimo 2.5 Pro`, plus an earlier verified compatible `Codex` route.
 
-## Install
+## Good Fit
+
+- medium or large repositories
+- workflows that frequently resume prior context
+- projects that need both code and knowledge retrieval
+- daily `Codex` / `Claude Code` usage
+
+## Not A Good Fit
+
+- very small repositories
+- workflows with little need for semantic retrieval
+- users unwilling to maintain local models
+- users expecting cross-platform zero-config setup
+
+## Quick Start
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e .
+```
+
+Set model paths:
+
+```powershell
+$env:LOCAL_SEARCH_LLAMA_SERVER="D:\path\to\llama-server.exe"
+$env:LOCAL_SEARCH_EMBED_GGUF="D:\models\bge-base-zh.f16.gguf"
+$env:LOCAL_SEARCH_RERANK_GGUF="D:\models\bge-reranker-v2-m3-Q8_0.gguf"
+```
+
+Then run a minimal smoke test:
+
+```powershell
+python -m local_mcp_search.cli reindex --mode auto
+python -m local_mcp_search.cli status
+python -m local_mcp_search.cli doctor
+codex mcp get local-search --json
+claude mcp get local-search
+```
+
+Unified launcher entrypoint:
+
+```powershell
+cpx
+cpx -Claude
 ```
 
 ## Local Models
@@ -117,55 +209,6 @@ Logs are written to:
 
 ```text
 %TEMP%\llama-logs\
-```
-
-## Quick Smoke Test
-
-Recommended minimal validation flow:
-
-1. Set model paths
-
-```powershell
-$env:LOCAL_SEARCH_LLAMA_SERVER="D:\path\to\llama-server.exe"
-$env:LOCAL_SEARCH_EMBED_GGUF="D:\models\bge-base-zh.f16.gguf"
-$env:LOCAL_SEARCH_RERANK_GGUF="D:\models\bge-reranker-v2-m3-Q8_0.gguf"
-```
-
-2. Reindex
-
-```powershell
-python -m local_mcp_search.cli reindex --mode auto
-```
-
-3. Check status
-
-```powershell
-python -m local_mcp_search.cli status
-```
-
-4. Launch and resume the latest Codex session
-
-```powershell
-cpx
-```
-
-5. Launch and resume the latest Claude session
-
-```powershell
-cpx -Claude
-```
-
-6. Verify MCP registration
-
-```powershell
-codex mcp get local-search --json
-claude mcp get local-search
-```
-
-7. Run diagnostics
-
-```powershell
-python -m local_mcp_search.cli doctor
 ```
 
 ## Environment Variables
@@ -619,20 +662,6 @@ Current benchmark interpretation should stay agent-specific:
 - third-party `Codex` provider compatibility is uneven
 - if interactive `Codex` works but benchmark `schema` mode fails, the provider is often incomplete on `exec` / `Responses API` / structured output rather than the benchmark being wrong
 - on some Windows MCP hosts, `change_context` may still prefer a fast timeout fallback; for stable resume / review flows, `repo://changes` may be the safer first step
-
-## Good Fit
-
-- medium or large repositories
-- workflows that frequently resume prior context
-- projects that need both code and knowledge retrieval
-- daily `Codex` / `Claude Code` usage
-
-## Not A Good Fit
-
-- very small repositories
-- workflows with little need for semantic retrieval
-- users unwilling to maintain local models
-- users expecting cross-platform zero-config setup
 
 ## Why Not Just `grep` / `Read`
 
