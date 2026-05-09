@@ -23,6 +23,29 @@
 
 ## 2. 发布前行动计划
 
+### 当前进度快照（2026-05-09）
+
+已完成：
+
+- `launcher` 默认值已改成安全默认值，不再把个人绝对路径写进仓库默认配置
+- `LICENSE` 已补齐，`pyproject.toml` 描述已更新为本地 `llama-server` 部署表述
+- `README.md` 已补齐平台边界、smoke test、`cpx` 默认行为、`doctor`、resources 与使用建议
+- `cpx` 空参默认启动 `Codex`，并按 workspace 恢复最近会话；`cpx -Claude` 恢复最近 Claude 会话
+- `doctor` 已落地；`codex_mcp_matches_workspace` 可用于排查 MCP 指向旧工作区的问题
+- `repo://overview`、`repo://dependency-summary`、`repo://changes` 已落地
+- `change_context` 已做 Windows 稳定性收口，当前优先保证“不长时间卡死”
+
+进行中：
+
+- 清理公开仓库中不该提交的本地说明文件、私有运行产物
+- 继续评估 `change_context` 是否需要在现有稳定方案上再增强
+
+待后续执行：
+
+- 首轮 benchmark
+- benchmark 结果回写 README / GitHub 发布文案
+- demo / issue 模板等发布后补充物料
+
 ### P0：必须完成
 
 1. 清理个人环境硬编码
@@ -93,6 +116,11 @@
 完成标准：
 
 - 仓库根目录不存在明显私人运行产物
+
+当前状态：
+
+- `1` 到 `5` 已完成
+- `6` 仍需在正式公开前最后清理一轮
 
 ### P1：强烈建议完成
 
@@ -177,6 +205,7 @@
 注意：
 
 - 没数据前不要宣传比例
+- 当前状态：已补计划和模板，正式 benchmark 留到下一轮执行
 
 执行方式建议：
 
@@ -239,14 +268,13 @@
 - 不建议为了“看起来更强”继续膨胀底层搜索工具数量
 - 优先做真正影响 agent 工作流效率的功能
 
-### 3.1 优先级最高：补诊断而不是补花活
+### 3.1 已落地：补诊断而不是补花活
 
-建议新增一个统一诊断入口，例如：
+当前已提供统一诊断入口：
 
 - `doctor`
-- 或 `startup_diagnosis`
 
-建议覆盖：
+当前已覆盖或已检查：
 
 - llama-server 是否存在
 - embedding / reranker 端口是否可用
@@ -299,9 +327,9 @@
 - 一旦公开给他人使用，仓库形态差异会明显变大
 - 这类配置比新增工具更实用
 
-### 3.5 中优先级：补资源型输出
+### 3.5 已落地：补资源型输出
 
-如果后续要更好服务 `Claude Code`，可以考虑增加 MCP resources：
+当前已提供 MCP resources：
 
 - `repo://overview`
 - `repo://dependency-summary`
@@ -312,14 +340,20 @@
 - Claude 对 resources 的利用通常更自然
 - 适合稳定、可重复读取的信息
 
-### 3.6 中优先级：补更强的 change_context
+### 3.6 已部分落地：继续补强 change_context
 
-当前 `change_context` 已经有价值，但后续可以增强：
+当前已经完成：
 
 - 按文件类型分组
 - 标注新增 / 修改 / 删除
-- 优先展示高风险文件
-- 结合 diff 摘要而不是只列文件
+- 风险提示
+- git `numstat` 摘要
+
+后续如果继续做，建议只补真正影响稳定性或可读性的部分：
+
+- 进一步压缩 MCP 通道里的超时概率
+- 在稳定前提下补更精炼的 diff 摘要
+- 保持 git-only / light-weight 回退路径，避免 resume / review 时再次卡死
 
 价值：
 
@@ -358,20 +392,17 @@
 
 > Local codebase search, reranking, and context compression for Codex and Claude Code, with workspace-aware session recovery and local llama-server deployment.
 
-## 5. 我建议的执行顺序
+## 5. 剩余执行顺序（截至 2026-05-09）
 
-1. 清理仓库和个人路径
-2. 加 `LICENSE`
-3. 调整 README 顶部定位与平台边界
-4. 增加 smoke test
-5. 加 `doctor` 设计说明或直接实现最小版
-6. 增加“为什么不用 grep / Read”的对比说明
-7. 发 GitHub
-8. 发布后再做 benchmark 和 demo
+1. 清理公开仓库中不该暴露的本地文件和临时说明
+2. 跑首轮 benchmark
+3. 将 benchmark 结果回写 README 与 GitHub 首页文案
+4. 准备 demo / issue 模板等发布辅助材料
+5. 发 GitHub
 
 ## 6. 当前结论
 
-当前项目已经具备公开发布价值，但更适合以“早期高质量工具”的姿态发布，而不是以“成熟通用平台”的姿态发布。
+当前项目已经具备公开发布价值，而且核心链路已经能跑通，但更适合以“早期高质量工具”的姿态发布，而不是以“成熟通用平台”的姿态发布。
 
 如果按这个计划推进，项目会更像：
 

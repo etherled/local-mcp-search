@@ -245,9 +245,9 @@ def register_claude_mcp(server_name: str, server_args: list[str], workspace: str
     if not claude:
         print("[mcp] claude not found in PATH, skipping Claude MCP registration")
         return
-    subprocess.run([claude, "mcp", "remove", server_name],
+    subprocess.run([claude, "mcp", "remove", server_name, "-s", "local"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    cmd = [claude, "mcp", "add", server_name] + server_args
+    cmd = [claude, "mcp", "add", "-s", "local", server_name] + server_args
     print(f"[mcp] registering Claude MCP server: {server_name}")
     result = subprocess.run(cmd, cwd=workspace, capture_output=True, text=True)
     if result.returncode != 0:
@@ -304,6 +304,10 @@ def _normalize_workspace_path(path: str) -> str:
     return os.path.normcase(os.path.normpath(str(Path(path).resolve())))
 
 
+def _preserve_workspace_path(path: str) -> str:
+    return os.path.normpath(str(Path(path).resolve()))
+
+
 def _resolve_workspace_root(path: str) -> str:
     p = Path(path).resolve()
     try:
@@ -311,9 +315,9 @@ def _resolve_workspace_root(path: str) -> str:
             ["git", "-C", str(p), "rev-parse", "--show-toplevel"],
             text=True, stderr=subprocess.DEVNULL,
         ).strip()
-        return _normalize_workspace_path(git_root)
+        return _preserve_workspace_path(git_root)
     except Exception:
-        return _normalize_workspace_path(str(p))
+        return _preserve_workspace_path(str(p))
 
 
 def _get_latest_codex_session(workspace: str) -> dict | None:
@@ -719,9 +723,11 @@ def main(argv: list[str] | None = None) -> int:
         wrapper_cmd = [sys.executable, str(wrapper_path)]
 
         register_codex_mcp(args.server_name, wrapper_cmd, workspace)
-        if args.register_claude:
+        should_register_claude = args.register_claude or args.client == "claude"
+        should_write_claude_project_config = args.write_claude_project_config or args.client == "claude"
+        if should_register_claude:
             register_claude_mcp(args.server_name, wrapper_cmd, workspace)
-        if args.write_claude_project_config:
+        if should_write_claude_project_config:
             write_claude_project_mcp_config(workspace, args.server_name, wrapper_cmd)
 
         # ── 5. Launch client ───────────────────────────────────────────────

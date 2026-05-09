@@ -16,6 +16,21 @@ def _build_no_proxy_handler() -> urllib.request.ProxyHandler:
     return urllib.request.ProxyHandler({})
 
 
+def _read_http_error_detail(exc: urllib.error.HTTPError) -> str:
+    cached = getattr(exc, "_local_search_detail", None)
+    if isinstance(cached, str):
+        return cached
+    try:
+        detail = exc.read().decode(errors="replace")
+    except Exception:
+        detail = ""
+    try:
+        setattr(exc, "_local_search_detail", detail)
+    except Exception:
+        pass
+    return detail
+
+
 class EmbeddingClient:
     # bge-base-zh has a 512-token context window; in embedding mode llama-server
     # forces n_batch == n_ubatch == 512. We therefore stay conservative on input
@@ -41,11 +56,7 @@ class EmbeddingClient:
         try:
             resp = self._opener.open(req, timeout=self._timeout)
         except urllib.error.HTTPError as exc:
-            detail = ""
-            try:
-                detail = exc.read().decode(errors="replace")[:500]
-            except Exception:
-                pass
+            detail = _read_http_error_detail(exc)[:500]
             logger.warning("embed_texts: %s %s — body: %s", url, exc, detail)
             raise
         except Exception as exc:
@@ -56,9 +67,8 @@ class EmbeddingClient:
 
     @staticmethod
     def _is_input_too_large_error(exc: urllib.error.HTTPError) -> bool:
-        try:
-            detail = exc.read().decode(errors="replace")
-        except Exception:
+        detail = _read_http_error_detail(exc)
+        if not detail:
             return False
         detail_lower = detail.lower()
         return "too large to process" in detail_lower or "current batch size: 512" in detail_lower

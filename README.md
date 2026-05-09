@@ -39,6 +39,18 @@
 - 向量索引使用本地 `LanceDB`
 - `cpx` 统一负责启动本地模型、刷新索引、注册 MCP、恢复最近会话
 
+## 当前状态
+
+截至 `2026-05-09`，当前仓库已经完成的主线调整包括：
+
+- embedding / reranker 已切到本地 `llama-server` 部署，由 `launcher` / `cpx` 统一拉起或复用
+- `cpx` 空参默认启动 `Codex`，并按 workspace 恢复最近会话；`cpx -Claude` 对应恢复最近 Claude 会话
+- `doctor` 可直接检查 `embedding`、`reranker`、MCP 注册目标与 workspace 是否匹配
+- `repo://overview`、`repo://dependency-summary`、`repo://changes` 已可作为稳定 resource 使用
+- `change_context` 在 Windows MCP 通道里已做稳定性收口，异常时会优先快速失败而不是长时间卡死
+
+当前还没有正式 benchmark 数据；仓库里先提供了行动计划和记录模板，后续再补量化结果。
+
 ## 安装
 
 ```powershell
@@ -484,7 +496,8 @@ health.status: healthy
 典型异常含义：
 
 - `codex_mcp_matches_workspace=false`：客户端还连着旧工作区或旧 wrapper
-- `change_context` 在 Windows 下报 `Invalid argument`：通常是宿主进程的 `stderr` 句柄兼容问题，升级到当前版本并重启会话即可
+- `change_context` 在部分 Windows MCP 宿主里仍可能快速返回 timeout：当前版本会优先避免长时间挂死；这时先用 `repo://changes`，或缩小 `max_results` 后重试
+- 旧版本里 `change_context` 的 `Invalid argument` / 长时间卡死，通常和宿主进程 `stderr` 句柄兼容有关；升级到当前版本并重启会话即可
 - `code_context_pack` / `code_semantic_search` 报连接失败：embedding 或 reranker 本地服务没起来，不是 MCP 注册问题
 
 ## 在 Codex / Claude 里如何用
@@ -571,6 +584,18 @@ health.status: healthy
 可直接使用模板：
 
 - [benchmark-template.md](/D:/trae_prj/mcp_sd/benchmark-template.md:1)
+
+当前说明：
+
+- 仓库已经提供 benchmark 计划与模板，但还没有正式对外可引用的数据结果
+- 在首轮 benchmark 完成前，不建议对外宣传具体的 token / 耗时节省比例
+
+## 已知限制
+
+- 当前仍是 `Windows-first`
+- 当前依赖本地 `llama-server` 部署与模型文件
+- 正式 benchmark 结果尚未补齐
+- `change_context` 在部分 Windows MCP 宿主里仍可能走快速 timeout 回退；稳定 resume / review 场景可优先用 `repo://changes`
 
 ## 适合场景
 
