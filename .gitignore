@@ -10,3 +10,5 @@ resume-codex-last.ps1
 .claude/
 .mcp.json
 codex resume *.txt
+benchmark/results/
+benchmark/tmp/

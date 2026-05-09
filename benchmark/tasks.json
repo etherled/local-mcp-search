@@ -1,0 +1,47 @@
+[
+  {
+    "id": "repo-overview-entrypoints",
+    "category": "understand",
+    "workspace": "D:/trae_prj/mcp_sd",
+    "prompt": "You are benchmarking repository understanding. Answer in JSON only. Determine the repository's likely Python code entrypoints. Return {\"entrypoints\":[...],\"reasoning_brief\":\"...\"}. Keep entrypoints as repo-relative paths.",
+    "expected_any": [
+      "src/local_mcp_search/__main__.py",
+      "src/local_mcp_search/cli.py",
+      "src/local_mcp_search/server.py"
+    ],
+    "min_expected_matches": 2
+  },
+  {
+    "id": "find-env-workspace-root",
+    "category": "lookup",
+    "workspace": "D:/trae_prj/mcp_sd",
+    "prompt": "Answer in JSON only. Find where MCP_SEARCH_WORKSPACE_ROOT is consumed by the application code. Return {\"paths\":[...],\"reasoning_brief\":\"...\"}. Keep paths repo-relative.",
+    "expected_any": [
+      "src/local_mcp_search/config.py",
+      "src/local_mcp_search/launcher.py"
+    ],
+    "min_expected_matches": 1
+  },
+  {
+    "id": "find-claude-registration",
+    "category": "lookup",
+    "workspace": "D:/trae_prj/mcp_sd",
+    "prompt": "Answer in JSON only. Find the function responsible for registering Claude MCP in this repository. Return {\"symbols\":[...],\"paths\":[...],\"reasoning_brief\":\"...\"}. Keep paths repo-relative.",
+    "expected_any": [
+      "register_claude_mcp",
+      "src/local_mcp_search/launcher.py"
+    ],
+    "min_expected_matches": 2
+  },
+  {
+    "id": "find-wrapper-writer",
+    "category": "lookup",
+    "workspace": "D:/trae_prj/mcp_sd",
+    "prompt": "Answer in JSON only. Identify the code that writes the MCP wrapper script used by Codex or Claude. Return {\"symbols\":[...],\"paths\":[...],\"reasoning_brief\":\"...\"}. Keep paths repo-relative.",
+    "expected_any": [
+      "_write_mcp_wrapper",
+      "src/local_mcp_search/launcher.py"
+    ],
+    "min_expected_matches": 2
+  }
+]

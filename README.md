@@ -49,7 +49,7 @@
 - `repo://overview`、`repo://dependency-summary`、`repo://changes` 已可作为稳定 resource 使用
 - `change_context` 在 Windows MCP 通道里已做稳定性收口，异常时会优先快速失败而不是长时间卡死
 
-当前还没有正式 benchmark 数据；仓库里先提供了行动计划和记录模板，后续再补量化结果。
+仓库已经补上自动 benchmark harness，可直接跑 `Codex x Claude x baseline x local-search` 的 `16-run` 矩阵；其中 `Claude + Xiaomi Mimo 2.5 Pro` 的首轮受控样本已经跑通，`Codex` 结果目前仍受跨区链路和 `429` 限流影响。
 
 ## 安装
 
@@ -567,34 +567,66 @@ health.status: healthy
 
 ## Benchmark
 
-如果你想验证它到底有没有“增效降本”，建议先按仓库内的 [GitHub 行动计划](</D:/trae_prj/mcp_sd/github行动计划.md:1>) 跑一组小基准：
+仓库现在已经提供最小自动 benchmark harness，可直接比较：
 
-- `grep + 手工读文件` vs `code_context_pack`
-- 无 `reranker` vs 有 `reranker`
-- 不用 `local-search` vs 用 `local-search`
+- `Codex`
+- `Claude`
+- `baseline`
+- `local-search`
 
-记录最少看这几个数：
+默认任务数是 `4`，完整一轮就是 `16 runs`。入口脚本：
 
-- 工具调用数
-- 总耗时
-- 最终上下文字符数
-- 最终 token 估算
-- 是否一次命中
+- [scripts/run_benchmark.py](/D:/trae_prj/mcp_sd/scripts/run_benchmark.py:1)
 
-可直接使用模板：
+完整运行：
 
-- [benchmark-template.md](/D:/trae_prj/mcp_sd/benchmark-template.md:1)
+```powershell
+python .\scripts\run_benchmark.py
+```
+
+脚本默认会做几件事：
+
+- 每个 case 自动落盘 `summary.json`、`result.json` 和原始客户端输出
+- 默认在 case 之间暂停 `12` 秒，降低 `Codex` / `Claude` 非交互 benchmark 时的限流概率
+- 识别明显的 `429 / rate limit` 失败并自动退避重试，默认最多再试 `2` 次
+
+先做小流量 smoke test 时，可只跑一个任务：
+
+```powershell
+python .\scripts\run_benchmark.py --task-ids repo-overview-entrypoints --clients codex --modes baseline
+```
+
+需要更快或更慢时，可显式调节：
+
+```powershell
+python .\scripts\run_benchmark.py --pause-seconds 0 --max-retries 0
+python .\scripts\run_benchmark.py --pause-seconds 20 --retry-backoff-seconds 45
+```
+
+更细说明见：
+
+- [benchmark/README.md](/D:/trae_prj/mcp_sd/benchmark/README.md:1)
 
 当前说明：
 
-- 仓库已经提供 benchmark 计划与模板，但还没有正式对外可引用的数据结果
-- 在首轮 benchmark 完成前，不建议对外宣传具体的 token / 耗时节省比例
+- 仓库已经提供自动 benchmark 脚本、任务集和结果落盘结构
+- 当前首轮正式样本以 `Claude + Xiaomi Mimo 2.5 Pro` 为主；`Codex` 因跨区链路和 `429` 限流暂不纳入主统计
+
+首轮受控结果：
+
+- 运行批次：`benchmark/results/20260509-153658-59f3183a`
+- 样本范围：`Claude`、`4 tasks`、`baseline vs local-search`
+- 通过率：`baseline 4/4`，`local-search 4/4`
+- 总耗时：`baseline 93.289s`，`local-search 67.962s`
+- 总费用：`baseline $0.5864`，`local-search $0.4280`
+
+这组结果说明，在当前这批只读检索任务上，`local-search` 已经能在不降低成功率的前提下，减少 `Claude` 端总耗时和总费用。
 
 ## 已知限制
 
 - 当前仍是 `Windows-first`
 - 当前依赖本地 `llama-server` 部署与模型文件
-- 正式 benchmark 结果尚未补齐
+- `Codex` 非交互 CLI 跑批当前仍会受跨区链路和上游 `429` 限流影响，因此暂不作为首轮正式 benchmark 主样本
 - `change_context` 在部分 Windows MCP 宿主里仍可能走快速 timeout 回退；稳定 resume / review 场景可优先用 `repo://changes`
 
 ## 适合场景

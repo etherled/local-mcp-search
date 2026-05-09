@@ -34,6 +34,7 @@
 - `doctor` 已落地；`codex_mcp_matches_workspace` 可用于排查 MCP 指向旧工作区的问题
 - `repo://overview`、`repo://dependency-summary`、`repo://changes` 已落地
 - `change_context` 已做 Windows 稳定性收口，当前优先保证“不长时间卡死”
+- 自动 benchmark harness 已落地，支持 `4 tasks x 2 clients x 2 modes = 16 runs`，并自动记录 `summary / result / raw output`
 
 进行中：
 
@@ -42,8 +43,9 @@
 
 待后续执行：
 
-- 首轮 benchmark
-- benchmark 结果回写 README / GitHub 发布文案
+- 扩大 `Claude + Xiaomi Mimo 2.5 Pro` 的 benchmark 样本规模
+- 视网络条件决定是否补 `Codex` 的正式对照数据
+- 将 benchmark 结果继续回写 README / GitHub 发布文案
 - demo / issue 模板等发布后补充物料
 
 ### P0：必须完成
@@ -205,7 +207,7 @@
 注意：
 
 - 没数据前不要宣传比例
-- 当前状态：已补计划和模板，正式 benchmark 留到下一轮执行
+- 当前状态：自动 benchmark harness、任务集和结果落盘结构已补齐；`Claude + Xiaomi Mimo 2.5 Pro` 首轮 `4 tasks` 样本已跑通，`local-search` 在 `4/4` 成功率下，将总耗时从 `93.289s` 降到 `67.962s`，总费用从 `$0.5864` 降到 `$0.4280`
 
 执行方式建议：
 
@@ -394,9 +396,9 @@
 
 ## 5. 剩余执行顺序（截至 2026-05-09）
 
-1. 清理公开仓库中不该暴露的本地文件和临时说明
-2. 跑首轮 benchmark
-3. 将 benchmark 结果回写 README 与 GitHub 首页文案
+1. 扩大 `Claude + Xiaomi Mimo 2.5 Pro` 的 benchmark 样本，补更多真实任务
+2. 将扩样后的 benchmark 结果继续回写 README 与 GitHub 首页文案
+3. 视网络条件决定是否补 `Codex` 的正式对照数据
 4. 准备 demo / issue 模板等发布辅助材料
 5. 发 GitHub
 

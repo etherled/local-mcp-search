@@ -454,6 +454,8 @@ def _launch_codex(workspace: str, fresh: bool, pick: bool, fork: bool) -> int:
                 _get_recent_codex_sessions(workspace), "Codex")
         else:
             session = _get_latest_codex_session(workspace)
+    session_id = session["id"] if session else "none"
+    print(f"[client] Codex workspace: {workspace} | sessionId: {session_id}")
     if session:
         if fork:
             print(f"[client] forking Codex session: {session['id']}")
@@ -476,6 +478,8 @@ def _launch_claude(workspace: str, fresh: bool, pick: bool, fork: bool) -> int:
                 _get_recent_claude_sessions(workspace), "Claude")
         else:
             session = _get_latest_claude_session(workspace)
+    session_id = session["id"] if session else "none"
+    print(f"[client] Claude workspace: {workspace} | sessionId: {session_id}")
     if session:
         cmd = [claude, "--resume", session["id"]]
         if fork:
