@@ -104,6 +104,28 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _build_output_schema() -> dict[str, Any]:
+    string_list = {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "entrypoints": string_list,
+            "paths": string_list,
+            "symbols": string_list,
+            "files": string_list,
+            "matches": string_list,
+            "reasoning_brief": {"type": "string"},
+            "summary": {"type": "string"},
+            "answer": {"type": "string"},
+            "text": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+
+
 def _extract_failure_text(result: ClientResult) -> str:
     parts = [part.strip() for part in (result.failure_reason, result.stderr, result.stdout) if part and part.strip()]
     return "\n".join(parts)[-4000:]
@@ -585,13 +607,7 @@ def main() -> int:
     _ensure_dir(run_root)
 
     output_schema_path = run_root / "output-schema.json"
-    _write_json(
-        output_schema_path,
-        {
-            "type": "object",
-            "additionalProperties": True,
-        },
-    )
+    _write_json(output_schema_path, _build_output_schema())
 
     tasks = _load_tasks(Path(args.tasks))
     if args.task_ids:
