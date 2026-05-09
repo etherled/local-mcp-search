@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from pathlib import Path
 
 logger = logging.getLogger("local_mcp_search.retrieval")
 
@@ -313,7 +315,7 @@ class RetrievalService:
         wrapper = (self.settings.workspace_root / ".mcp-index" / "_mcp_server_wrapper.py").resolve()
         try:
             result = subprocess.run(
-                [codex, "mcp", "get", "local-search"],
+                [codex, "mcp", "get", "local-search", "--json"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -325,7 +327,16 @@ class RetrievalService:
             return None
         if result.returncode != 0:
             return None
-        return str(wrapper).lower() in result.stdout.lower()
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return str(wrapper).lower() in result.stdout.lower()
+        transport = payload.get("transport") if isinstance(payload, dict) else None
+        args = transport.get("args") if isinstance(transport, dict) else None
+        if not isinstance(args, list):
+            return None
+        normalized = [str(Path(arg).resolve()).lower() if Path(arg).exists() else str(arg).lower() for arg in args]
+        return str(wrapper).lower() in normalized
 
     def reindex(self, mode: str = "auto") -> dict:
         with self._reindex_lock:

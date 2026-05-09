@@ -12,3 +12,4 @@ resume-codex-last.ps1
 codex resume *.txt
 benchmark/results/
 benchmark/tmp/
+docs/archive/

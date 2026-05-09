@@ -35,6 +35,9 @@
 - `repo://overview`、`repo://dependency-summary`、`repo://changes` 已落地
 - `change_context` 已做 Windows 稳定性收口，当前优先保证“不长时间卡死”
 - 自动 benchmark harness 已落地，支持 `4 tasks x 2 clients x 2 modes = 16 runs`，并自动记录 `summary / result / raw output`
+- 已完成 benchmark 文案收口：`Claude` 以 `成功率 + 计费 + 耗时 + 轮次` 为主口径，`Codex` 仅保留已验证兼容链路下的 `成功率 + 耗时 + token` 结论
+- 已补最小 GitHub 发布物料：`CONTRIBUTING.md`、`SECURITY.md`、`SUPPORT.md`、issue templates
+- 已从首发仓库范围移除过期 archive 方案文档，降低公开仓库理解成本
 
 进行中：
 
@@ -43,9 +46,9 @@
 
 待后续执行：
 
-- 扩大 `Claude + Xiaomi Mimo 2.5 Pro` 的 benchmark 样本规模
-- 视网络条件决定是否补 `Codex` 的正式对照数据
-- 将 benchmark 结果继续回写 README / GitHub 发布文案
+- 做一次干净环境的最小 smoke test 验证
+- 清理公开仓库中剩余不该提交的本地说明文件、私有运行产物
+- 准备 GitHub 仓库并完成首次发布
 - demo / issue 模板等发布后补充物料
 
 ### P0：必须完成
@@ -100,7 +103,7 @@
 2. `python -m local_mcp_search.cli status`
 3. `cpx`
 4. `cpx -Claude`
-5. `codex mcp get local-search`
+5. `codex mcp get local-search --json`
 6. `claude mcp get local-search`
 
 完成标准：
@@ -207,7 +210,10 @@
 注意：
 
 - 没数据前不要宣传比例
-- 当前状态：自动 benchmark harness、任务集和结果落盘结构已补齐；`Claude + Xiaomi Mimo 2.5 Pro` 首轮 `4 tasks` 样本已跑通，`local-search` 在 `4/4` 成功率下，将总耗时从 `93.289s` 降到 `67.962s`，总费用从 `$0.5864` 降到 `$0.4280`
+- 当前状态：自动 benchmark harness、任务集和结果落盘结构已补齐；当前已保留两组有效 benchmark 结论：
+  - `Claude + Xiaomi Mimo 2.5 Pro`：重点看 `成功率 + 计费 + 耗时 + 轮次`
+  - `Codex`：仅保留此前已验证兼容链路下的 `成功率 + 耗时 + token` 结论
+- `Mimo` 与本次直连 `DeepSeek` 都不适合当前 `Codex CLI` 的 `Responses API` 链路，因此不再继续纳入 `Codex` benchmark
 
 执行方式建议：
 
@@ -396,11 +402,11 @@
 
 ## 5. 剩余执行顺序（截至 2026-05-09）
 
-1. 扩大 `Claude + Xiaomi Mimo 2.5 Pro` 的 benchmark 样本，补更多真实任务
-2. 将扩样后的 benchmark 结果继续回写 README 与 GitHub 首页文案
-3. 视网络条件决定是否补 `Codex` 的正式对照数据
-4. 准备 demo / issue 模板等发布辅助材料
-5. 发 GitHub
+1. 完成公开仓库最终清理，确保 `.claude/`、`.mcp.json`、临时说明文档、会话残留文件都不进入首发仓库
+2. 以当前有效 benchmark 结论为准，继续收口 README 与 GitHub 首页文案，不再补测不兼容的 `Codex` 第三方链路
+3. 补最小发布辅助物料：建议至少有 `CONTRIBUTING.md`、`SECURITY.md`、issue templates 或简化版 `SUPPORT.md`
+4. 检查仓库首发体验：从一个干净目录按 README 跑一遍最小 smoke test
+5. 创建 GitHub 仓库并首发
 
 ## 6. 当前结论
 

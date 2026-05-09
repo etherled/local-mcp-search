@@ -158,7 +158,7 @@ cpx -Claude
 6. 检查 MCP 是否已注册
 
 ```powershell
-codex mcp get local-search
+codex mcp get local-search --json
 claude mcp get local-search
 ```
 
@@ -462,7 +462,7 @@ Codex：
 
 ```powershell
 codex mcp list
-codex mcp get local-search
+codex mcp get local-search --json
 ```
 
 Claude：
@@ -489,7 +489,7 @@ health.status: healthy
 
 如果 `Codex` / `Claude Code` 里仍然报 MCP 启动失败，或 `change_context` / `repo://changes` 这类工具异常：
 
-- 先确认 `codex mcp get local-search` / `claude mcp get local-search` 指向的是当前工作区的 `.mcp-index/_mcp_server_wrapper.py`
+- 先确认 `codex mcp get local-search --json` / `claude mcp get local-search` 指向的是当前工作区的 `.mcp-index/_mcp_server_wrapper.py`
 - 如果路径已经对了，但客户端会话还是沿用旧连接，重启一次客户端会话再试
 - 再用 `python -m local_mcp_search.cli doctor` 看 `codex_mcp_matches_workspace`、`embedding`、`reranker` 状态
 
@@ -589,11 +589,18 @@ python .\scripts\run_benchmark.py
 - 每个 case 自动落盘 `summary.json`、`result.json` 和原始客户端输出
 - 默认在 case 之间暂停 `12` 秒，降低 `Codex` / `Claude` 非交互 benchmark 时的限流概率
 - 识别明显的 `429 / rate limit` 失败并自动退避重试，默认最多再试 `2` 次
+- `Codex` 默认走 `--output-schema` 的结构化输出链路；如果你使用第三方 OpenAI 兼容转发，建议优先试 `--codex-output-mode plain`
 
 先做小流量 smoke test 时，可只跑一个任务：
 
 ```powershell
 python .\scripts\run_benchmark.py --task-ids repo-overview-entrypoints --clients codex --modes baseline
+```
+
+如果 `Codex` 供应商对 structured output 兼容性一般，可改成 plain JSON fallback：
+
+```powershell
+python .\scripts\run_benchmark.py --clients codex --codex-output-mode plain
 ```
 
 需要更快或更慢时，可显式调节：
@@ -610,23 +617,38 @@ python .\scripts\run_benchmark.py --pause-seconds 20 --retry-backoff-seconds 45
 当前说明：
 
 - 仓库已经提供自动 benchmark 脚本、任务集和结果落盘结构
-- 当前首轮正式样本以 `Claude + Xiaomi Mimo 2.5 Pro` 为主；`Codex` 因跨区链路和 `429` 限流暂不纳入主统计
+- 当前已拿到两批有效样本：`Claude + Xiaomi Mimo 2.5 Pro`，以及此前官网兼容链路下的 `Codex`
+- 已确认部分第三方或非官方兼容链路虽然可用于交互对话，但会在 `Codex exec` 的 `Responses API` 或 structured output 路径上单独失败；这类链路不应直接拿来做 `Codex` benchmark 结论
 
-首轮受控结果：
+当前受控结果：
 
-- 运行批次：`benchmark/results/20260509-153658-59f3183a`
-- 样本范围：`Claude`、`4 tasks`、`baseline vs local-search`
+- `Claude`
+- 运行批次：`benchmark/results/20260509-204132-f33bdb48`
+- 样本范围：`4 tasks`、`baseline vs local-search`
 - 通过率：`baseline 4/4`，`local-search 4/4`
-- 总耗时：`baseline 93.289s`，`local-search 67.962s`
-- 总费用：`baseline $0.5864`，`local-search $0.4280`
+- 总耗时：`baseline 66.653s`，`local-search 56.259s`，提速约 `15.59%`
+- 总计费：`baseline 0.651079`，`local-search 0.443238`，下降约 `31.92%`
+- 总轮次：`baseline 27`，`local-search 18`，下降约 `33.33%`
+- token 现象：`baseline 366078`，`local-search 379791`
+- 结论：当前样本里 `local-search` 对 `Claude` 的主要价值是保持成功率的前提下，降低计费、提速、减少轮次；`token` 更适合作为诊断信息，不应作为 Claude 的主结论口径
 
-这组结果说明，在当前这批只读检索任务上，`local-search` 已经能在不降低成功率的前提下，减少 `Claude` 端总耗时和总费用。
+- `Codex`
+- 运行批次：`benchmark/results/20260509-170327-d1209b40`
+- 样本范围：`4 tasks`、`baseline vs local-search`
+- 通过率：`baseline 4/4`，`local-search 4/4`
+- 总耗时：`baseline 215.693s`，`local-search 207.573s`，提速约 `3.76%`
+- 总 token：`baseline 730540`，`local-search 570248`
+- token 下降：约 `21.94%`
+- 结论：当前样本里 `local-search` 对 `Codex` 既有轻微提速，也有明确的 token 节省价值
+
+当前 benchmark 结论不宜强行只用一套口径。现阶段更准确的说法是：`local-search` 对不同 agent 的收益结构不同。对 `Claude`，主口径应看 `成功率 + 计费 + 耗时 + 轮次`；对 `Codex`，主口径可看 `成功率 + 耗时 + token`。
 
 ## 已知限制
 
 - 当前仍是 `Windows-first`
 - 当前依赖本地 `llama-server` 部署与模型文件
-- `Codex` 非交互 CLI 跑批当前仍会受跨区链路和上游 `429` 限流影响，因此暂不作为首轮正式 benchmark 主样本
+- 第三方 `Codex` 转发链路在 `schema` / `response_format` 路径上可能不兼容；并非所有 OpenAI 兼容接口都能直接用于当前 `Codex CLI`
+- 如果 `Codex` 交互式对话正常，但 benchmark 的 `schema` 模式失败，不代表 benchmark 存在并发问题，更常见原因是供应商对 `exec` / `Responses API` / structured output 链路兼容不完整
 - `change_context` 在部分 Windows MCP 宿主里仍可能走快速 timeout 回退；稳定 resume / review 场景可优先用 `repo://changes`
 
 ## 适合场景

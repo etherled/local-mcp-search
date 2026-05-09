@@ -88,8 +88,10 @@ class ClientResult:
     structured_output: dict[str, Any] | None
     session_id: str | None
     total_cost_usd: float | None
+    usage: dict[str, Any] | None
     raw_path: Path
     failure_reason: str | None
+    output_mode_used: str | None = None
 
 
 def _load_tasks(path: Path) -> list[dict[str, Any]]:
@@ -105,6 +107,17 @@ def _write_json(path: Path, payload: Any) -> None:
 
 
 def _build_output_schema() -> dict[str, Any]:
+    property_names = [
+        "entrypoints",
+        "paths",
+        "symbols",
+        "files",
+        "matches",
+        "reasoning_brief",
+        "summary",
+        "answer",
+        "text",
+    ]
     string_list = {
         "type": "array",
         "items": {"type": "string"},
@@ -122,6 +135,7 @@ def _build_output_schema() -> dict[str, Any]:
             "answer": {"type": "string"},
             "text": {"type": "string"},
         },
+        "required": property_names,
         "additionalProperties": False,
     }
 
@@ -163,6 +177,63 @@ def _parse_json_text(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _extract_codex_text_output(lines: list[str]) -> dict[str, Any] | None:
+    last_text: str | None = None
+    for line in reversed(lines):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "item.completed":
+            continue
+        item = payload.get("item") or {}
+        item_type = item.get("type")
+        if item_type not in {"agent_message", "message"}:
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if last_text is None:
+            last_text = text
+        parsed = _parse_json_text(text)
+        if parsed is not None:
+            return parsed
+    if last_text is not None:
+        return {"text": _strip_code_fence(last_text)}
+    return None
+
+
+def _normalize_usage_dict(raw_usage: dict[str, Any] | None) -> dict[str, int] | None:
+    if not isinstance(raw_usage, dict):
+        return None
+
+    def _as_int(value: Any) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        return 0
+
+    normalized = {
+        "input_tokens": _as_int(raw_usage.get("input_tokens")),
+        "output_tokens": _as_int(raw_usage.get("output_tokens")),
+        "cached_input_tokens": _as_int(raw_usage.get("cached_input_tokens", raw_usage.get("cache_read_input_tokens"))),
+        "cache_creation_input_tokens": _as_int(
+            raw_usage.get("cache_creation_input_tokens", raw_usage.get("cache_creation_input_tokens"))
+        ),
+        "reasoning_output_tokens": _as_int(raw_usage.get("reasoning_output_tokens")),
+    }
+    normalized["total_input_tokens"] = (
+        normalized["input_tokens"]
+        + normalized["cached_input_tokens"]
+        + normalized["cache_creation_input_tokens"]
+    )
+    normalized["total_tokens"] = normalized["total_input_tokens"] + normalized["output_tokens"]
+    if not any(normalized.values()):
+        return None
+    return normalized
 
 
 def _normalize_match_text(value: str) -> str:
@@ -227,6 +298,7 @@ def _prepare_local_search(workspace: str, mode: str, keep_running: bool) -> dict
     os.environ["EMBEDDING_BASE_URL"] = f"http://127.0.0.1:{DEFAULT_EMBED_PORT}/v1"
     os.environ["EMBEDDING_MODEL"] = "bge-base-zh"
     os.environ["EMBEDDING_API_KEY"] = ""
+    os.environ.pop("MCP_SEARCH_AGENT_PROFILE", None)
     if disable_reranker:
         os.environ["MCP_SEARCH_RERANKER_ENABLED"] = "false"
         os.environ.pop("RERANKER_BASE_URL", None)
@@ -289,6 +361,7 @@ def _run_codex(
     result_dir: Path,
     mode: str,
     wrapper_path: Path | None,
+    codex_output_mode: str,
 ) -> ClientResult:
     temp_home = REPO_ROOT / "benchmark" / "tmp" / f"codex-home-{uuid.uuid4().hex[:8]}"
     if temp_home.exists():
@@ -304,21 +377,18 @@ def _run_codex(
                 f'mcp_servers.local-search.args={json.dumps([str(wrapper_path)])}',
             ]
         )
-    cmd = _build_windows_command(
-        "codex",
-        [
-            "exec",
-            "--json",
-            "--skip-git-repo-check",
-            "--ignore-rules",
-            "-C",
-            workspace,
-            "--output-schema",
-            str(output_schema_path),
-            *config_append,
-            "-",
-        ],
-    )
+    cmd_args = [
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--ignore-rules",
+        "-C",
+        workspace,
+    ]
+    if codex_output_mode == "schema":
+        cmd_args.extend(["--output-schema", str(output_schema_path)])
+    cmd_args.extend([*config_append, "-"])
+    cmd = _build_windows_command("codex", cmd_args)
     env = os.environ.copy()
     env["CODEX_HOME"] = str(temp_home)
     started = time.perf_counter()
@@ -339,6 +409,7 @@ def _run_codex(
     structured = None
     session_id = None
     total_cost_usd = None
+    usage = None
     failure_reason = None
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     for line in reversed(lines):
@@ -351,28 +422,24 @@ def _run_codex(
             structured = payload.get("structured_output")
             session_id = payload.get("session_id")
             total_cost_usd = payload.get("total_cost_usd")
+            usage = _normalize_usage_dict(payload.get("usage"))
             if payload.get("type") == "turn.failed":
                 failure = payload.get("error") or {}
                 if isinstance(failure, dict):
                     failure_reason = failure.get("message")
         break
     if structured is None:
+        structured = _extract_codex_text_output(lines)
+    if failure_reason is None:
         for line in lines:
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if payload.get("type") == "item.completed":
-                item = payload.get("item") or {}
-                text = item.get("text")
-                if text:
-                    try:
-                        structured = json.loads(text)
-                    except json.JSONDecodeError:
-                        structured = {"text": text}
-                    break
-            if payload.get("type") == "error" and not failure_reason:
+            if payload.get("type") == "error":
                 failure_reason = payload.get("message")
+                if failure_reason:
+                    break
     shutil.rmtree(temp_home, ignore_errors=True)
     return ClientResult(
         exit_code=proc.returncode,
@@ -383,8 +450,10 @@ def _run_codex(
         structured_output=structured,
         session_id=session_id,
         total_cost_usd=total_cost_usd,
+        usage=usage,
         raw_path=raw_path,
         failure_reason=failure_reason,
+        output_mode_used=codex_output_mode,
     )
 
 
@@ -441,6 +510,7 @@ def _run_claude(
     structured = None
     session_id = None
     total_cost_usd = None
+    usage = None
     failure_reason = None
     if proc.stdout.strip():
         try:
@@ -452,6 +522,7 @@ def _run_claude(
                     structured = _parse_json_text(result_text)
             session_id = parsed.get("session_id")
             total_cost_usd = parsed.get("total_cost_usd")
+            usage = _normalize_usage_dict(parsed.get("usage"))
             if parsed.get("subtype") != "success":
                 failure_reason = parsed.get("result")
         except json.JSONDecodeError:
@@ -465,6 +536,7 @@ def _run_claude(
         structured_output=structured,
         session_id=session_id,
         total_cost_usd=total_cost_usd,
+        usage=usage,
         raw_path=raw_path,
         failure_reason=failure_reason,
     )
@@ -506,6 +578,7 @@ def _run_case(
     keep_running: bool,
     max_retries: int,
     retry_backoff_seconds: float,
+    codex_output_mode: str,
 ) -> dict[str, Any]:
     workspace = str(Path(task["workspace"]).resolve())
     case_id = f"{task['id']}--{client}--{mode}"
@@ -526,7 +599,15 @@ def _run_case(
     while True:
         attempts += 1
         if client == "codex":
-            result = _run_codex(workspace, prompt, output_schema_path, case_dir, mode, wrapper_path)
+            result = _run_codex(
+                workspace,
+                prompt,
+                output_schema_path,
+                case_dir,
+                mode,
+                wrapper_path,
+                codex_output_mode,
+            )
         else:
             result = _run_claude(workspace, prompt, case_dir, mode, wrapper_path)
         retryable_failure = _is_retryable_failure(result)
@@ -551,9 +632,12 @@ def _run_case(
         "duration_seconds": round(result.duration_seconds, 3),
         "session_id": result.session_id,
         "total_cost_usd": result.total_cost_usd,
+        "usage": result.usage,
         "failure_reason": result.failure_reason,
         "attempts": attempts,
         "retryable_failure": retryable_failure,
+        "output_mode_requested": codex_output_mode if client == "codex" else None,
+        "output_mode_used": result.output_mode_used,
         "passed": score["passed"] and _result_succeeded(result),
         "score": score,
         "structured_output": result.structured_output,
@@ -600,6 +684,12 @@ def main() -> int:
         default=DEFAULT_RETRY_BACKOFF_SECONDS,
         help="Base backoff in seconds for retryable failures; doubled on each retry.",
     )
+    parser.add_argument(
+        "--codex-output-mode",
+        choices=["schema", "plain"],
+        default="schema",
+        help="How Codex final output is collected. schema uses --output-schema; plain relies on JSON text output.",
+    )
     args = parser.parse_args()
 
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
@@ -637,6 +727,7 @@ def main() -> int:
                     keep_running=args.keep_running,
                     max_retries=args.max_retries,
                     retry_backoff_seconds=args.retry_backoff_seconds,
+                    codex_output_mode=args.codex_output_mode,
                 )
                 summary.append(payload)
                 if args.pause_seconds > 0 and index < total:
