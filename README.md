@@ -576,84 +576,44 @@ If the client prefers MCP resources, these stable resources are also available:
 
 ## Benchmark
 
-The repository includes a minimal automated benchmark harness for:
+The repository includes an automated harness to compare `baseline` vs `local-search` on both `Claude` and `Codex`.
 
-- `Codex`
-- `Claude`
-- `baseline`
-- `local-search`
+Current controlled results already show practical value:
 
-The default task count is `4`, so a full run is `16 runs`. Entry script:
+| Agent | Sample | Success | Main Result |
+| --- | --- | --- | --- |
+| `Claude` | `4 tasks` | `4/4 -> 4/4` | cost `-31.92%`, turns `-33.33%`, latency `-15.59%` |
+| `Codex` | `4 tasks` | `4/4 -> 4/4` | token `-21.94%`, latency `-3.76%` |
+
+That is the main benchmark takeaway:
+
+- for `Claude`, the value is preserving success while reducing cost, time, and turn count
+- for `Codex`, the clearest signal is token reduction with a modest latency win
+- benchmark interpretation should stay agent-specific, rather than forcing one metric across every client
+
+Current validated result sets:
+
+- `Claude + Xiaomi Mimo 2.5 Pro`
+- an earlier verified compatible `Codex` route
+
+Known boundary:
+
+- some third-party or non-official routes work for interactive chat but still fail specifically on `Codex exec`, `Responses API`, or structured-output paths
+- those routes should not be used for official `Codex` benchmark conclusions
+
+Repro entrypoint:
 
 - [scripts/run_benchmark.py](/D:/trae_prj/mcp_sd/scripts/run_benchmark.py:1)
 
-Run the full matrix:
+Run the default matrix:
 
 ```powershell
 python .\scripts\run_benchmark.py
 ```
 
-Default behavior:
-
-- each case stores `summary.json`, `result.json`, and raw client output
-- waits `12` seconds between cases by default to reduce non-interactive throttling
-- retries obvious `429 / rate limit` failures with backoff, up to `2` retries by default
-- `Codex` uses structured output by default; if your provider is only partially compatible, try `--codex-output-mode plain`
-
-Single-task smoke test:
-
-```powershell
-python .\scripts\run_benchmark.py --task-ids repo-overview-entrypoints --clients codex --modes baseline
-```
-
-Fallback for weaker Codex structured-output compatibility:
-
-```powershell
-python .\scripts\run_benchmark.py --clients codex --codex-output-mode plain
-```
-
-Adjust pacing:
-
-```powershell
-python .\scripts\run_benchmark.py --pause-seconds 0 --max-retries 0
-python .\scripts\run_benchmark.py --pause-seconds 20 --retry-backoff-seconds 45
-```
-
-More details:
+For detailed benchmark workflow, result structure, and compatibility notes:
 
 - [benchmark/README.md](/D:/trae_prj/mcp_sd/benchmark/README.md:1)
-
-Current benchmark notes:
-
-- the repository already includes automated benchmark scripts, tasks, and result persistence
-- two benchmark result groups are currently treated as valid: `Claude + Xiaomi Mimo 2.5 Pro`, and an earlier verified compatible `Codex` route
-- some third-party or non-official routes may work for interactive chat but still fail specifically on `Codex exec` `Responses API` or structured-output paths; those routes should not be used for official `Codex` benchmark conclusions
-
-Current controlled results:
-
-- `Claude`
-- run: `benchmark/results/20260509-204132-f33bdb48`
-- sample: `4 tasks`, `baseline vs local-search`
-- pass rate: `baseline 4/4`, `local-search 4/4`
-- total duration: `baseline 66.653s`, `local-search 56.259s`
-- total cost: `baseline 0.651079`, `local-search 0.443238`
-- total turns: `baseline 27`, `local-search 18`
-- token pattern: `baseline 366078`, `local-search 379791`
-- conclusion: for `Claude`, the primary value is preserving success while reducing cost, latency, and turn count; token is more diagnostic than primary
-
-- `Codex`
-- run: `benchmark/results/20260509-170327-d1209b40`
-- sample: `4 tasks`, `baseline vs local-search`
-- pass rate: `baseline 4/4`, `local-search 4/4`
-- total duration: `baseline 215.693s`, `local-search 207.573s`
-- total token: `baseline 730540`, `local-search 570248`
-- token reduction: about `21.94%`
-- conclusion: for `Codex`, `local-search` shows a mild latency win and a clear token reduction signal
-
-Current benchmark interpretation should stay agent-specific:
-
-- for `Claude`, the primary framing is `success rate + cost + latency + turn count`
-- for `Codex`, the primary framing is `success rate + latency + token`
 
 ## Known Limits
 

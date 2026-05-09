@@ -610,81 +610,44 @@ health.status: healthy
 
 ## Benchmark
 
-仓库现在已经提供最小自动 benchmark harness，可直接比较：
+仓库已经内置自动 benchmark harness，可对比 `Claude` / `Codex` 在 `baseline` 与 `local-search` 下的表现。
 
-- `Codex`
-- `Claude`
-- `baseline`
-- `local-search`
+当前受控结果已经说明这套方案有实际价值：
 
-默认任务数是 `4`，完整一轮就是 `16 runs`。入口脚本：
+| Agent | 样本 | 成功率 | 当前主要结果 |
+| --- | --- | --- | --- |
+| `Claude` | `4 tasks` | `4/4 -> 4/4` | cost `-31.92%`，turns `-33.33%`，latency `-15.59%` |
+| `Codex` | `4 tasks` | `4/4 -> 4/4` | token `-21.94%`，latency `-3.76%` |
+
+这也是当前 benchmark 最核心的结论：
+
+- 对 `Claude`，价值重点是保持成功率，同时降低计费、耗时和轮次
+- 对 `Codex`，最清晰的信号是 token 下降，同时有轻微提速
+- benchmark 结论应保持 agent-specific，而不是强行把所有客户端都压成同一指标口径
+
+当前已验证的样本来源：
+
+- `Claude + Xiaomi Mimo 2.5 Pro`
+- 一组更早验证过兼容性的 `Codex` 路由
+
+当前边界也很明确：
+
+- 部分第三方或非官方兼容链路虽然能用于交互对话，但会在 `Codex exec`、`Responses API` 或 structured output 路径上单独失败
+- 这类链路不应直接拿来做正式的 `Codex` benchmark 结论
+
+复现入口：
 
 - [scripts/run_benchmark.py](/D:/trae_prj/mcp_sd/scripts/run_benchmark.py:1)
 
-完整运行：
+直接运行默认矩阵：
 
 ```powershell
 python .\scripts\run_benchmark.py
 ```
 
-脚本默认会做几件事：
-
-- 每个 case 自动落盘 `summary.json`、`result.json` 和原始客户端输出
-- 默认在 case 之间暂停 `12` 秒，降低 `Codex` / `Claude` 非交互 benchmark 时的限流概率
-- 识别明显的 `429 / rate limit` 失败并自动退避重试，默认最多再试 `2` 次
-- `Codex` 默认走 `--output-schema` 的结构化输出链路；如果你使用第三方 OpenAI 兼容转发，建议优先试 `--codex-output-mode plain`
-
-先做小流量 smoke test 时，可只跑一个任务：
-
-```powershell
-python .\scripts\run_benchmark.py --task-ids repo-overview-entrypoints --clients codex --modes baseline
-```
-
-如果 `Codex` 供应商对 structured output 兼容性一般，可改成 plain JSON fallback：
-
-```powershell
-python .\scripts\run_benchmark.py --clients codex --codex-output-mode plain
-```
-
-需要更快或更慢时，可显式调节：
-
-```powershell
-python .\scripts\run_benchmark.py --pause-seconds 0 --max-retries 0
-python .\scripts\run_benchmark.py --pause-seconds 20 --retry-backoff-seconds 45
-```
-
-更细说明见：
+更细的 benchmark 工作流、结果结构和兼容性说明见：
 
 - [benchmark/README.md](/D:/trae_prj/mcp_sd/benchmark/README.md:1)
-
-当前说明：
-
-- 仓库已经提供自动 benchmark 脚本、任务集和结果落盘结构
-- 当前已拿到两批有效样本：`Claude + Xiaomi Mimo 2.5 Pro`，以及此前官网兼容链路下的 `Codex`
-- 已确认部分第三方或非官方兼容链路虽然可用于交互对话，但会在 `Codex exec` 的 `Responses API` 或 structured output 路径上单独失败；这类链路不应直接拿来做 `Codex` benchmark 结论
-
-当前受控结果：
-
-- `Claude`
-- 运行批次：`benchmark/results/20260509-204132-f33bdb48`
-- 样本范围：`4 tasks`、`baseline vs local-search`
-- 通过率：`baseline 4/4`，`local-search 4/4`
-- 总耗时：`baseline 66.653s`，`local-search 56.259s`，提速约 `15.59%`
-- 总计费：`baseline 0.651079`，`local-search 0.443238`，下降约 `31.92%`
-- 总轮次：`baseline 27`，`local-search 18`，下降约 `33.33%`
-- token 现象：`baseline 366078`，`local-search 379791`
-- 结论：当前样本里 `local-search` 对 `Claude` 的主要价值是保持成功率的前提下，降低计费、提速、减少轮次；`token` 更适合作为诊断信息，不应作为 Claude 的主结论口径
-
-- `Codex`
-- 运行批次：`benchmark/results/20260509-170327-d1209b40`
-- 样本范围：`4 tasks`、`baseline vs local-search`
-- 通过率：`baseline 4/4`，`local-search 4/4`
-- 总耗时：`baseline 215.693s`，`local-search 207.573s`，提速约 `3.76%`
-- 总 token：`baseline 730540`，`local-search 570248`
-- token 下降：约 `21.94%`
-- 结论：当前样本里 `local-search` 对 `Codex` 既有轻微提速，也有明确的 token 节省价值
-
-当前 benchmark 结论不宜强行只用一套口径。现阶段更准确的说法是：`local-search` 对不同 agent 的收益结构不同。对 `Claude`，主口径应看 `成功率 + 计费 + 耗时 + 轮次`；对 `Codex`，主口径可看 `成功率 + 耗时 + token`。
 
 ## 已知限制
 
